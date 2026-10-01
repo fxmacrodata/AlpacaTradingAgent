@@ -17,6 +17,11 @@ from .coindesk_utils import get_news as get_coindesk_news_util
 from .defillama_utils import get_fundamentals as get_defillama_fundamentals_util
 from .earnings_utils import get_earnings_calendar_data, get_earnings_surprises_analysis
 from .macro_utils import get_macro_economic_summary, get_economic_indicators_report, get_treasury_yield_curve
+from .fxmacrodata_utils import (
+    get_global_macro_indicators as get_fxmacrodata_indicators_util,
+    get_economic_release_calendar as get_fxmacrodata_calendar_util,
+    get_fx_rates_report as get_fxmacrodata_fx_rates_util,
+)
 from dateutil.relativedelta import relativedelta
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -1801,3 +1806,62 @@ def get_yield_curve_analysis(
     """
     
     return get_treasury_yield_curve(curr_date)
+
+
+def get_global_macro_indicators(
+    curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+    currencies: Annotated[str, "Comma-separated currency codes, e.g. 'USD,EUR,GBP,JPY'"] = "",
+) -> str:
+    """
+    Retrieve the latest policy rate, inflation, unemployment, GDP and government bond
+    yields for several economies from FXMacroData.
+
+    Args:
+        curr_date (str): Current date in yyyy-mm-dd format
+        currencies (str): Comma-separated currency codes (defaults to config)
+
+    Returns:
+        str: One markdown table per currency with latest, previous and change
+    """
+
+    return get_fxmacrodata_indicators_util(curr_date, currencies or None)
+
+
+def get_economic_release_calendar(
+    curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+    currencies: Annotated[str, "Comma-separated currency codes, e.g. 'USD,EUR,GBP,JPY'"] = "",
+    days_ahead: Annotated[int, "Number of days ahead to include"] = 10,
+) -> str:
+    """
+    Retrieve scheduled economic data releases from FXMacroData.
+
+    Args:
+        curr_date (str): Current date in yyyy-mm-dd format
+        currencies (str): Comma-separated currency codes (defaults to config)
+        days_ahead (int): Number of days ahead to include (default 10)
+
+    Returns:
+        str: Markdown table of upcoming releases with importance
+    """
+
+    return get_fxmacrodata_calendar_util(curr_date, currencies or None, days_ahead)
+
+
+def get_fx_rates(
+    curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+    pairs: Annotated[str, "Comma-separated currency pairs, e.g. 'EUR/USD,USD/JPY'"] = "",
+    lookback_days: Annotated[int, "Number of days to look back for data"] = 30,
+) -> str:
+    """
+    Retrieve FX reference rates from FXMacroData (requires FXMACRODATA_API_KEY).
+
+    Args:
+        curr_date (str): Current date in yyyy-mm-dd format
+        pairs (str): Comma-separated currency pairs (defaults to config)
+        lookback_days (int): Number of days to look back (default 30)
+
+    Returns:
+        str: Markdown table with latest rate, change and range per pair
+    """
+
+    return get_fxmacrodata_fx_rates_util(curr_date, pairs or None, lookback_days)

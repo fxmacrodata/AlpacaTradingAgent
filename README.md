@@ -162,6 +162,10 @@ Set `LLM_PROVIDER` in `.env`, the CLI, or the WebUI. Supported providers include
 - **FRED API Key** (Required for macro analysis):
   - Get your free key from [FRED](https://fred.stlouisfed.org/docs/api/api_key.html)
 
+- **FXMacroData API Key** (Optional, macro analyst):
+  - Adds policy rates, inflation, unemployment, GDP and bond yields for non-US economies, the upcoming economic release calendar, and FX rates
+  - Set `FXMACRODATA_ENABLED=True` to use it without a key (USD only, recent 90 days); other currencies and FX rates need a key from [FXMacroData](https://fxmacrodata.com/?utm_source=github&utm_medium=referral&utm_campaign=AlpacaTradingAgent&utm_content=readme)
+
 #### Crypto Data APIs
 - **CoinDesk/CryptoCompare API Key** (Required for crypto news):
   - Sign up at [CryptoCompare](https://www.cryptocompare.com/cryptopian/api-keys)
