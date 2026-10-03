@@ -2,7 +2,7 @@ import requests
 import json
 from datetime import datetime, timedelta
 from typing import Annotated, Dict, List, Optional
-from .config import get_api_key, DATA_DIR
+from .config import get_api_key, get_config, DATA_DIR
 import os
 import pandas as pd
 
@@ -42,16 +42,20 @@ def get_fred_data(series_id: str, start_date: str, end_date: str) -> Dict:
         'file_type': 'json',
         'observation_start': start_date,
         'observation_end': end_date,
+        # Observation dates alone do not exclude later revisions/releases.
+        'realtime_start': end_date,
+        'realtime_end': end_date,
         'sort_order': 'desc',
         'limit': 100
     }
     
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=get_config().get("macro_request_timeout_seconds", 20))
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        return {"error": f"Failed to fetch FRED data for {series_id}: {str(e)}"}
+        # requests errors can include the URL with its api_key query parameter.
+        return {"error": f"Failed to fetch FRED data for {series_id}: {type(e).__name__}"}
 
 
 def get_treasury_yield_curve(curr_date: str) -> str:
@@ -324,21 +328,19 @@ def get_fed_calendar_and_minutes(curr_date: str) -> str:
             
             result += "\n"
     
-    # Fed meeting schedule (approximate - would need real Fed calendar API)
-    result += "### 2024 FOMC Meeting Schedule\n"
-    result += "- **January 30-31**: FOMC Meeting\n"
-    result += "- **March 19-20**: FOMC Meeting\n"
-    result += "- **April 30-May 1**: FOMC Meeting\n"
-    result += "- **June 11-12**: FOMC Meeting\n"
-    result += "- **July 30-31**: FOMC Meeting\n"
-    result += "- **September 17-18**: FOMC Meeting\n"
-    result += "- **October 29-30**: FOMC Meeting\n"
-    result += "- **December 17-18**: FOMC Meeting\n\n"
+    result += "### FOMC Meeting Schedule\n"
+    result += (
+        "Verified meeting dates and minutes are not available from this FRED tool. "
+        "Do not infer an upcoming meeting or policy stance from a past year's calendar. "
+        "Consult the [Federal Reserve calendar]"
+        "(https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm) "
+        "or the configured release-calendar tool for dated evidence.\n\n"
+    )
     
     result += "### Key Policy Considerations\n"
     result += "- **Dual Mandate**: Maximum employment and price stability\n"
     result += "- **Inflation Target**: 2% annual PCE inflation\n"
-    result += "- **Balance Sheet**: Quantitative tightening operations\n"
+    result += "- **Balance Sheet**: Verify the balance-sheet policy in dated Fed communications\n"
     result += "- **Forward Guidance**: Communication of future policy intentions\n\n"
     
     result += "### Recent Economic Projections Summary\n"
@@ -394,4 +396,4 @@ def get_macro_economic_summary(curr_date: str) -> str:
     result += "- **Low VIX**: Risk of complacency\n"
     result += "- **Vol Regime Change**: Adjust position sizing\n\n"
     
-    return result 
+    return result

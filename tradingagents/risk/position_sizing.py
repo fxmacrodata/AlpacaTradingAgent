@@ -23,9 +23,8 @@ DEFAULT_CONFIDENCE_EDGE = {
     "low": (0.50, 1.1),
 }
 
-# Assumed stop distance as a fraction of price when no volatility data exists.
+# Public default retained for compatibility; override via RiskParameters.
 FALLBACK_STOP_PCT = 0.05
-
 
 def compute_atr(bars, period: int = 14) -> Optional[float]:
     """Wilder-smoothed Average True Range from an OHLC DataFrame.
@@ -94,6 +93,7 @@ class RiskParameters:
     max_position_pct: float = 0.20  # single-position notional / equity
     max_total_exposure_pct: float = 0.80  # gross portfolio exposure / equity
     min_notional: float = 10.0
+    fallback_stop_pct: float = FALLBACK_STOP_PCT
     confidence_edge: dict = field(
         default_factory=lambda: dict(DEFAULT_CONFIDENCE_EDGE)
     )
@@ -160,7 +160,7 @@ class PositionSizer:
             equity = float(equity)
             price = float(price)
             requested_notional = float(requested_notional)
-            current_gross_exposure = max(0.0, float(current_gross_exposure or 0.0))
+            current_gross_exposure = float(current_gross_exposure)
         except (TypeError, ValueError):
             return _rejection("Invalid numeric inputs for position sizing.")
 
@@ -170,12 +170,19 @@ class PositionSizer:
             return _rejection(f"Invalid price: {price}.")
         if not math.isfinite(requested_notional) or requested_notional <= 0.0:
             return _rejection(f"Invalid requested notional: {requested_notional}.")
+        if not math.isfinite(current_gross_exposure) or current_gross_exposure < 0:
+            return _rejection("Invalid gross exposure; cannot verify available capital.")
+        limits = (params.risk_per_trade_pct, params.kelly_fraction, params.atr_stop_multiplier,
+                  params.max_position_pct, params.max_total_exposure_pct, params.min_notional,
+                  params.fallback_stop_pct)
+        if any(not math.isfinite(v) or v <= 0 for v in limits) or params.fallback_stop_pct >= 1:
+            return _rejection("Invalid risk parameters; limits must be finite and positive.")
 
         notes = []
         if atr is not None and math.isfinite(atr) and atr > 0.0:
             stop_distance = float(atr) * params.atr_stop_multiplier
         else:
-            stop_distance = price * FALLBACK_STOP_PCT
+            stop_distance = price * params.fallback_stop_pct
             notes.append("atr_unavailable_default_stop")
 
         exposure_room = equity * params.max_total_exposure_pct - current_gross_exposure
@@ -227,7 +234,7 @@ class PositionSizer:
                 notes,
             )
 
-        notional = round(notional, 2)
+        notional = math.floor(notional * 100) / 100
         quantity = notional / price
         risk_amount = round(quantity * stop_distance, 2)
         if str(side).strip().lower() in ("sell", "short"):

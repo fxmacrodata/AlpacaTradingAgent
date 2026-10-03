@@ -307,7 +307,7 @@ class ExecutionIntegrationTests(unittest.TestCase):
             ), patch.object(
                 AlpacaUtils,
                 "close_position",
-                return_value={"success": True},
+                return_value={"success": True, "status": "filled"},
             ) as close_position, patch.object(
                 AlpacaUtils, "place_market_order"
             ) as place_order:

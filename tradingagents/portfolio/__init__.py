@@ -2,7 +2,7 @@
 
 The agent pipeline analyzes each symbol in isolation; nothing ever looks at
 the book as a whole. This layer sits above the per-symbol decisions and
-adjusts the size of NEW long exposure with three plain-arithmetic guards —
+adjusts the size of NEW long or short exposure with three plain-arithmetic guards —
 zero LLM involvement, so it cannot be argued out of a limit:
 
 - **Correlation penalty**: a candidate whose returns correlate above a
@@ -15,20 +15,18 @@ zero LLM involvement, so it cannot be argued out of a limit:
 - **Gross exposure cap**: total book value is clipped to a percentage of
   equity; this is the only guard allowed to zero a trade, and it says why.
 
-Sizing rules: factors never size a trade UP (the agents' requested amount
-is the ceiling), missing data never punishes (factor 1.0 plus a warning),
-and combined penalties are floored so trades cannot silently vanish.
+Sizing factors never exceed the requested amount. Missing price history
+skips statistical penalties, but missing account exposure blocks entries
+when the portfolio cap cannot be verified.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
+import math
 
 import pandas as pd
-
-_MIN_OVERLAP_BARS = 20  # fewer shared bars than this makes correlation noise
-
 
 @dataclass
 class PortfolioLimitsConfig:
@@ -40,6 +38,7 @@ class PortfolioLimitsConfig:
     target_daily_vol_pct: float = 2.0
     max_gross_exposure_pct: float = 100.0
     min_size_factor: float = 0.25
+    min_overlap_bars: int = 20
 
     @classmethod
     def from_config(cls, config: Optional[dict]) -> "PortfolioLimitsConfig":
@@ -53,6 +52,7 @@ class PortfolioLimitsConfig:
             "target_daily_vol_pct": "portfolio_target_daily_vol_pct",
             "max_gross_exposure_pct": "portfolio_max_gross_exposure_pct",
             "min_size_factor": "portfolio_min_size_factor",
+            "min_overlap_bars": "portfolio_min_overlap_bars",
         }
         kwargs = {}
         for field_name, key in mapping.items():
@@ -86,7 +86,8 @@ def daily_returns(prices) -> pd.Series:
         if "close" not in frame.columns:
             raise ValueError("Price data needs a 'close' column.")
         closes = frame["close"].astype(float)
-    return closes.pct_change().dropna()
+    closes = closes[~closes.index.duplicated(keep="last")].sort_index()
+    return closes.pct_change(fill_method=None).dropna()
 
 
 def realized_daily_vol(returns: pd.Series) -> float:
@@ -116,14 +117,20 @@ def assess_new_position(
     open_positions: Dict[str, float],
     price_history: Dict[str, pd.DataFrame],
     config: Optional[PortfolioLimitsConfig] = None,
+    side: str = "buy",
 ) -> PortfolioVerdict:
     """Size a proposed NEW position against the whole book.
 
-    `open_positions` maps symbol -> absolute market value; `price_history`
+    `open_positions` maps symbol -> signed market value; `price_history`
     maps symbol -> OHLCV frame (the candidate's own history included).
     """
     config = config or PortfolioLimitsConfig()
-    requested = max(float(requested_notional or 0.0), 0.0)
+    requested = float(requested_notional or 0.0)
+    if not math.isfinite(requested) or requested < 0:
+        raise ValueError("Requested notional must be finite and non-negative.")
+    for factor in (config.min_size_factor, config.correlated_size_factor):
+        if not math.isfinite(factor) or not 0 <= factor <= 1:
+            raise ValueError("Portfolio size factors must be within [0, 1].")
     verdict = PortfolioVerdict(
         symbol=symbol,
         requested_notional=requested,
@@ -145,9 +152,10 @@ def assess_new_position(
             if other is None:
                 continue
             aligned = pd.concat([candidate, other], axis=1, join="inner").dropna()
-            if len(aligned) < _MIN_OVERLAP_BARS:
+            if len(aligned) < config.min_overlap_bars:
                 continue
             corr = float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
+            corr *= (-1 if side == "sell" else 1) * (-1 if open_positions[other_symbol] < 0 else 1)
             if pd.isna(corr):
                 continue
             verdict.correlations[other_symbol] = corr
@@ -191,8 +199,12 @@ def assess_new_position(
     # --- gross exposure cap ----------------------------------------------------
     cap_pct = float(config.max_gross_exposure_pct or 0)
     equity_value = float(equity) if equity else None
-    if cap_pct > 0 and equity_value and equity_value > 0:
+    if not math.isfinite(cap_pct) or cap_pct < 0:
+        raise ValueError("Gross exposure cap must be finite and non-negative.")
+    if cap_pct > 0 and equity_value and math.isfinite(equity_value) and equity_value > 0:
         gross = sum(abs(float(v or 0.0)) for v in (open_positions or {}).values())
+        if not math.isfinite(gross):
+            raise ValueError("Portfolio exposure is unavailable or invalid.")
         headroom = equity_value * cap_pct / 100.0 - gross
         if verdict.adjusted_notional > headroom:
             clipped = max(headroom, 0.0)
@@ -203,8 +215,9 @@ def assess_new_position(
             )
             verdict.adjusted_notional = clipped
     elif cap_pct > 0:
+        verdict.adjusted_notional = 0.0
         verdict.reasons.append(
-            "Account equity unavailable — gross exposure cap skipped."
+            "Account equity unavailable — new exposure blocked until the cap can be checked."
         )
 
     verdict.allowed = verdict.adjusted_notional > 0
@@ -218,15 +231,15 @@ def adjust_new_position_notional(
     gather_state: Callable[[], Tuple[Optional[float], Dict[str, float], Dict[str, pd.DataFrame]]],
     config: Optional[PortfolioLimitsConfig] = None,
 ) -> float:
-    """Execution-time hook: portfolio-aware size for NEW long exposure only.
+    """Execution-time hook: portfolio-aware size for new long or short exposure.
 
     SELL/HOLD/NEUTRAL (closing or keeping) pass through untouched — the
     layer limits what gets added to the book, never what leaves it. Any
-    failure in `gather_state` (broker down, bad data) returns the original
-    amount: the portfolio layer must never block a trade by breaking.
+    failure in `gather_state` (broker down, bad data) blocks new exposure;
+    closing actions continue to pass through.
     """
     config = config or PortfolioLimitsConfig()
-    if not config.enabled or str(action or "").upper() not in ("BUY", "LONG"):
+    if not config.enabled or str(action or "").upper() not in ("BUY", "LONG", "SHORT"):
         return requested_notional
     try:
         equity, open_positions, price_history = gather_state()
@@ -237,6 +250,7 @@ def adjust_new_position_notional(
             open_positions or {},
             price_history or {},
             config=config,
+            side="sell" if str(action).upper() == "SHORT" else "buy",
         )
         for reason in verdict.reasons:
             print(f"[PORTFOLIO] {symbol}: {reason}")
@@ -247,13 +261,14 @@ def adjust_new_position_notional(
             )
         return verdict.adjusted_notional
     except Exception as exc:
-        print(f"[PORTFOLIO] Sizing skipped for {symbol}: {exc}")
-        return requested_notional
+        print(f"[PORTFOLIO] Cannot verify exposure for {symbol}; new entry blocked: {exc}")
+        return 0.0
 
 
 def gather_portfolio_state_via_alpaca(
     symbol: str,
     lookback_days: int = 120,
+    lookback_bars: Optional[int] = None,
 ) -> Tuple[Optional[float], Dict[str, float], Dict[str, pd.DataFrame]]:
     """Collect (equity, open positions, price history) from Alpaca.
 
@@ -275,17 +290,24 @@ def gather_portfolio_state_via_alpaca(
         equity = None
 
     open_positions: Dict[str, float] = {}
+    data_symbols = {symbol.upper().replace("/", ""): symbol.upper()}
     for pos in client.get_all_positions():
-        try:
-            open_positions[str(pos.symbol).upper()] = abs(float(pos.market_value))
-        except (TypeError, ValueError):
-            continue
+        key = str(pos.symbol).upper().replace("/", "")
+        value = float(pos.market_value)
+        if not math.isfinite(value):
+            raise ValueError(f"Invalid position value for {key}")
+        open_positions[key] = value
+        asset_class = getattr(pos, "asset_class", None)
+        asset_class = getattr(asset_class, "value", asset_class)
+        data_symbols[key] = key[:-3] + "/USD" if asset_class == "crypto" and key.endswith("USD") else key
 
+    if lookback_bars is not None:
+        lookback_days = max(lookback_days, math.ceil((lookback_bars + 1) * 365 / 252 * 1.1))
     start = (date.today() - timedelta(days=lookback_days)).isoformat()
     price_history: Dict[str, pd.DataFrame] = {}
     for wanted in {symbol.upper().replace("/", ""), *open_positions}:
         try:
-            price_history[wanted] = AlpacaUtils.get_stock_data(wanted, start, None)
+            price_history[wanted] = AlpacaUtils.get_stock_data(data_symbols.get(wanted, wanted), start, None)
         except Exception:
             continue
     # The candidate may have been requested with its display symbol.

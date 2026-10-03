@@ -312,7 +312,8 @@ def create_market_analyst(llm, toolkit):
             from tradingagents.regime import RegimeConfig, regime_report_block
 
             regime_block = regime_report_block(
-                ticker, config=RegimeConfig.from_config(get_config() or {})
+                ticker, config=RegimeConfig.from_config(get_config() or {}),
+                as_of_date=current_date,
             )
             if regime_block:
                 market_report = f"{market_report}\n\n{regime_block}"

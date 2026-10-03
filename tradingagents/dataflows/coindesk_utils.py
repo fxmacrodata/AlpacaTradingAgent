@@ -1,7 +1,7 @@
 import requests
 import re
 import datetime
-from .config import get_api_key
+from .config import get_api_key, get_config
 
 
 def get_news(symbol: str, n: int = 5):
@@ -25,7 +25,7 @@ def get_news(symbol: str, n: int = 5):
     headers = {"Authorization": f"Apikey {api_key}"}
 
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=get_config().get("news_request_timeout_seconds", 20))
         response.raise_for_status()
         news_data = response.json()
 
@@ -53,4 +53,4 @@ def get_news(symbol: str, n: int = 5):
     except requests.exceptions.RequestException as e:
         return f"Error fetching news from CryptoCompare: {e}"
     except Exception as e:
-        return f"An error occurred: {e}" 
+        return f"An error occurred: {e}"

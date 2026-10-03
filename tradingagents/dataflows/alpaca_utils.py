@@ -4,6 +4,7 @@ import math
 import os
 import pandas as pd
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import Annotated, Union, Optional, List, Dict, Any, TYPE_CHECKING
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
@@ -34,6 +35,24 @@ from tradingagents.risk.position_sizing import (
     SizingDecision,
     compute_atr,
 )
+
+# Serialize entry reconciliation and submission within this process. Broker
+# open orders also protect subsequent loop iterations and process restarts.
+_ENTRY_ORDER_LOCK = threading.Lock()
+
+
+class PendingEntryError(RuntimeError):
+    pass
+
+
+def _submit_entry_order(client, request):
+    with _ENTRY_ORDER_LOCK:
+        pending = client.get_orders(filter=GetOrdersRequest(
+            status=QueryOrderStatus.OPEN, symbols=[request.symbol], limit=1,
+        ))
+        if pending:
+            raise PendingEntryError(f"Open order already exists for {request.symbol}; entry deferred.")
+        return client.submit_order(request)
 
 
 # Fallback dictionary for company names
@@ -815,7 +834,7 @@ class AlpacaUtils:
                 return {"success": False, "error": "Must specify either notional or qty"}
             
             # Submit the order
-            order = client.submit_order(order_request)
+            order = _submit_entry_order(client, order_request)
             
             return {
                 "success": True,
@@ -828,6 +847,8 @@ class AlpacaUtils:
                 "message": f"Successfully placed {side} order for {symbol}"
             }
             
+        except PendingEntryError as e:
+            return {"success": False, "broker_attempted": False, "error": str(e)}
         except Exception as e:
             error_msg = f"Error placing {side} order for {symbol}: {e}"
             print(error_msg)
@@ -880,7 +901,7 @@ class AlpacaUtils:
                 stop_loss=stop_loss,
                 take_profit=take_profit,
             )
-            order = client.submit_order(order_request)
+            order = _submit_entry_order(client, order_request)
 
             return {
                 "success": True,
@@ -899,6 +920,8 @@ class AlpacaUtils:
                 ),
             }
 
+        except PendingEntryError as e:
+            return {"success": False, "broker_attempted": False, "error": str(e)}
         except Exception as e:
             error_msg = f"Error placing protected {side} order for {symbol}: {e}"
             print(error_msg)
@@ -917,6 +940,10 @@ class AlpacaUtils:
             Dictionary with close result information
         """
         try:
+            percentage = float(percentage)
+            if not math.isfinite(percentage) or not 0 < percentage <= 100:
+                return {"success": False, "broker_attempted": False,
+                        "error": "Close percentage must be greater than 0 and at most 100."}
             client = get_alpaca_trading_client()
             
             # Normalize symbol for Alpaca
@@ -929,7 +956,7 @@ class AlpacaUtils:
             else:
                 # Create close position request for partial close
                 close_request = ClosePositionRequest(
-                    percentage=str(percentage / 100.0)  # Convert percentage to decimal string
+                    percentage=str(percentage)
                 )
                 order = client.close_position(alpaca_symbol, close_request)
             
@@ -940,7 +967,7 @@ class AlpacaUtils:
                 "side": order.side,
                 "qty": float(order.qty) if order.qty else None,
                 "status": order.status,
-                "message": f"Successfully closed {percentage}% of {symbol} position"
+                "message": f"Submitted order to close {percentage}% of {symbol} position"
             }
             
         except Exception as e:
@@ -959,12 +986,14 @@ class AlpacaUtils:
         client = get_alpaca_trading_client()
         account = client.get_account()
         equity = float(account.equity)
+        if not math.isfinite(equity) or equity <= 0:
+            raise ValueError("Account equity is unavailable or invalid")
         gross_exposure = 0.0
         for position in client.get_all_positions():
-            try:
-                gross_exposure += abs(float(position.market_value))
-            except (TypeError, ValueError):
-                continue
+            value = float(position.market_value)
+            if not math.isfinite(value):
+                raise ValueError("Position exposure is unavailable or invalid")
+            gross_exposure += abs(value)
         return {"equity": equity, "gross_exposure": gross_exposure}
 
     @staticmethod
@@ -1023,9 +1052,9 @@ class AlpacaUtils:
     ) -> dict:
         """Validate and execute a typed TradeIntent.
 
-        Protective stops/targets in the intent are audit metadata for now. This
-        method intentionally delegates to the existing simple market/close
-        execution path until bracket/OCO/OTO order placement is implemented.
+        Numeric equity stops/targets are submitted as bracket/OTO orders.
+        A failed sizing or protected submission must not enlarge or strip
+        protection from the requested exposure.
         """
         # Imported lazily: a module-level import of the agents package from
         # here creates a dataflows <-> agents import cycle that breaks
@@ -1116,10 +1145,14 @@ class AlpacaUtils:
                     side=order_side,
                 )
             except Exception as e:
-                warnings.append(
-                    f"Risk sizing unavailable ({e}); falling back to configured notional."
-                )
-                risk_sizing_info = {"applied": False, "error": str(e)}
+                return {
+                    "success": False,
+                    "broker_attempted": False,
+                    "error": f"Risk sizing unavailable; new exposure blocked: {e}",
+                    "trade_intent": intent.model_dump(mode="json"),
+                    "intent_warnings": warnings,
+                    "risk_sizing": {"applied": False, "error": str(e)},
+                }
             else:
                 if not sizing.approved:
                     return {
@@ -1141,6 +1174,18 @@ class AlpacaUtils:
             else None
         )
         controls = intent.risk_controls
+        if (
+            opens_new_exposure and not is_crypto and protective_prices is None
+            and get_config().get("protective_bracket_orders_enabled", True)
+            and (controls.stop_loss_price is not None or controls.take_profit_price is not None)
+        ):
+            return {
+                "success": False, "broker_attempted": False,
+                "error": "Invalid protective prices; new exposure blocked.",
+                "trade_intent": intent.model_dump(mode="json"),
+                "intent_warnings": warnings,
+                "protective_order_status": "invalid_controls",
+            }
         if (
             risk_stop_price
             and not is_crypto
@@ -1178,11 +1223,10 @@ class AlpacaUtils:
                 protective_status = "submitted_bracket"
             elif action_result.get("order_class") == "oto":
                 protective_status = "submitted_oto"
-            elif action_result.get("protective_fallback"):
-                protective_status = "bracket_rejected_fallback_plain"
+            elif action_result.get("protective_failed"):
+                protective_status = "submission_failed"
                 warnings.append(
-                    "Protective order submission was rejected by the broker; "
-                    f"entered with a plain market order instead ({action_result.get('protective_error')})."
+                    "Protected entry could not be confirmed; no unprotected replacement was submitted."
                 )
         if protective_status == "advisory_only" and opens_new_exposure and (
             intent.risk_controls.required_controls
@@ -1237,7 +1281,7 @@ class AlpacaUtils:
             if inverted:
                 warnings.append(
                     f"Protective prices are inconsistent for a {'long' if opening_long else 'short'} entry "
-                    f"(stop={stop_price}, target={target_price}); controls remain advisory."
+                    f"(stop={stop_price}, target={target_price}); entry requires corrected levels."
                 )
                 return None
 
@@ -1248,8 +1292,7 @@ class AlpacaUtils:
         """Best-effort account snapshot for the safety layer's breakers.
 
         Returns (account, position_value); either may be None when the broker
-        is unreachable — the guard reports those checks as skipped instead of
-        guessing.
+        is unreachable. New exposure is then blocked until it can be verified.
         """
         try:
             client = get_alpaca_trading_client()
@@ -1313,6 +1356,10 @@ class AlpacaUtils:
                 gate the new exposure. This prevents a tripped loss breaker from
                 trapping a position while still refusing the replacement order.
                 """
+                from tradingagents.safety.guardrails import SafetyVerdict
+
+                if guard is None and not risk_reducing:
+                    return SafetyVerdict(False, ["Safety controls unavailable; new exposure blocked."])
                 if guard is None or not guard.enabled:
                     return None
                 verdict = guard.check_order(
@@ -1322,7 +1369,14 @@ class AlpacaUtils:
                 )
                 if verdict.allowed and not risk_reducing:
                     account_state, position_value = AlpacaUtils._safety_context(sym)
-                    if account_state:
+                    if (
+                        not account_state or position_value is None
+                        or not all(math.isfinite(float(account_state.get(key, float("nan"))))
+                                   and float(account_state[key]) > 0 for key in ("equity", "last_equity"))
+                        or not math.isfinite(float(position_value))
+                    ):
+                        return SafetyVerdict(False, ["Account risk data unavailable; new exposure blocked."])
+                    else:
                         verdict = guard.check_order(
                             sym,
                             amount,
@@ -1365,11 +1419,11 @@ class AlpacaUtils:
                 converts a dollar budget into that many shares."""
                 try:
                     quote = AlpacaUtils.get_latest_quote(sym)
-                    price = quote.get("bid_price") or quote.get("ask_price")
-                    price = float(price) if price else 0.0
+                    prices = [float(quote.get(key) or 0) for key in ("bid_price", "ask_price")]
+                    price = max(prices)
                 except Exception:
                     return None
-                if price <= 0:
+                if not math.isfinite(price) or price <= 0 or not math.isfinite(amount) or amount <= 0:
                     return None
                 qty = int(amount / price)
                 return qty if qty >= 1 else None
@@ -1377,10 +1431,12 @@ class AlpacaUtils:
             def _open_position(sym: str, side: str, amount: float) -> dict:
                 """Open a position, attaching broker protective orders when available.
 
-                Falls back to a plain market order if the protected submission is
-                rejected, so a broker-side validation error never blocks the entry
-                the agents decided on (matching previous behaviour).
+                Never retry an ambiguous protected submission as a plain order:
+                the first request may already have reached the broker.
                 """
+                if not math.isfinite(amount) or amount <= 0:
+                    return {"success": False, "broker_attempted": False,
+                            "error": "New exposure blocked: no positive verified notional available."}
                 verdict = _check_safety(sym, amount)
                 if verdict is not None and not verdict.allowed:
                     return _safety_failure(sym, verdict)
@@ -1410,11 +1466,23 @@ class AlpacaUtils:
                     )
                     if protected.get("success"):
                         return protected
-                    fallback = AlpacaUtils.place_market_order(sym, side, qty=qty_int)
-                    fallback["protective_fallback"] = True
-                    fallback["protective_error"] = protected.get("error")
-                    return fallback
+                    protected["protective_failed"] = True
+                    return protected
                 return AlpacaUtils.place_market_order(sym, side, qty=qty_int)
+
+            pending_close = False
+
+            def _close_filled(result: dict) -> bool:
+                nonlocal pending_close
+                if not result.get("success"):
+                    return False
+                status = getattr(result.get("status"), "value", result.get("status"))
+                if status == "filled":
+                    return True
+                pending_close = True
+                results.append({"action": "wait_for_close", "message":
+                                "Close order is pending; reassess the live position before opening new exposure."})
+                return False
 
             if allow_shorts:
                 # Trading mode: LONG/NEUTRAL/SHORT signals
@@ -1431,7 +1499,7 @@ class AlpacaUtils:
                         # Close LONG and open SHORT
                         close_result = _close_position(symbol)
                         results.append({"action": "close_long", "result": close_result})
-                        if close_result.get("success"):
+                        if _close_filled(close_result):
                             # Check if this is crypto - Alpaca doesn't support crypto short selling directly
                             is_crypto = "/" in symbol.upper()
                             if is_crypto:
@@ -1452,7 +1520,7 @@ class AlpacaUtils:
                         # Close SHORT and open LONG
                         close_result = _close_position(symbol)
                         results.append({"action": "close_short", "result": close_result})
-                        if close_result.get("success"):
+                        if _close_filled(close_result):
                             long_result = _open_position(symbol, "buy", dollar_amount)
                             results.append({"action": "open_long", "result": long_result})
                 
@@ -1531,6 +1599,8 @@ class AlpacaUtils:
                 "signal": signal,
                 "actions": results
             }
+            if pending_close:
+                response["pending_close"] = True
             safety_failure = next(
                 (
                     action["result"]

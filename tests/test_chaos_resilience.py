@@ -120,7 +120,7 @@ class MidFlipOutageTests(unittest.TestCase):
              patch.object(
                  AlpacaUtils, "place_market_order", side_effect=open_side_effect
              ), \
-             patch.object(AlpacaUtils, "_safety_context", return_value=(None, None)), \
+             patch.object(AlpacaUtils, "_safety_context", return_value=({"equity": 100000, "last_equity": 100000}, 0)), \
              patch.object(
                  AlpacaUtils,
                  "get_latest_quote",
@@ -140,7 +140,7 @@ class MidFlipOutageTests(unittest.TestCase):
             guard = _guard(tmp, max_consecutive_rejections=5)
             outcome = self._run_flip(
                 guard,
-                close_result={"success": True, "message": "closed"},
+                close_result={"success": True, "status": "filled", "message": "closed"},
                 open_side_effect=[{"success": False, "error": "connection reset"}],
             )
             self.assertFalse(outcome["success"])
@@ -166,7 +166,7 @@ class MidFlipOutageTests(unittest.TestCase):
             guard = _guard(tmp)
             outcome = self._run_flip(
                 guard,
-                close_result={"success": True},
+                close_result={"success": True, "status": "filled"},
                 open_side_effect=ConnectionError("socket closed mid-request"),
             )
             self.assertFalse(outcome["success"])
@@ -205,8 +205,8 @@ class KillSwitchAndBreakerFlowTests(unittest.TestCase):
             self.assertFalse(verdict.allowed)
             self.assertEqual(verdict.checks["rejection_streak"]["status"], "fail")
 
-    def test_unreachable_account_degrades_to_cheap_checks_only(self):
-        """Broker down: orders are not wrongly blocked by absent breakers."""
+    def test_unreachable_account_blocks_unverified_new_exposure(self):
+        """Broker down: account breakers must not silently disappear."""
         with tempfile.TemporaryDirectory() as tmp:
             guard = _guard(tmp, daily_loss_halt_pct=10.0, max_drawdown_halt_pct=15.0)
             with patch.object(
@@ -230,7 +230,8 @@ class KillSwitchAndBreakerFlowTests(unittest.TestCase):
                     dollar_amount=1000.0,
                     allow_shorts=False,
                 )
-            self.assertTrue(outcome["success"])
+            self.assertFalse(outcome["success"])
+            self.assertTrue(outcome["safety_blocked"])
 
 
 class MalformedBrokerPayloadTests(unittest.TestCase):

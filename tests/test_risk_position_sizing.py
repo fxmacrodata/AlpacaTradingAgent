@@ -334,7 +334,7 @@ class ExecuteTradeIntentRiskSizingTests(unittest.TestCase):
             95.0,
         )
 
-    def test_risk_engine_data_failure_fails_open_with_warning(self):
+    def test_risk_engine_data_failure_blocks_new_exposure(self):
         with patch.object(
             AlpacaUtils,
             "get_account_risk_snapshot",
@@ -353,12 +353,10 @@ class ExecuteTradeIntentRiskSizingTests(unittest.TestCase):
                 risk_params={},
             )
 
-        self.assertTrue(result["success"])
+        self.assertFalse(result["success"])
         self.assertFalse(result["risk_sizing"]["applied"])
-        self.assertEqual(execute.call_args.kwargs["dollar_amount"], 50_000)
-        self.assertTrue(
-            any("risk sizing" in w.lower() for w in result["intent_warnings"])
-        )
+        execute.assert_not_called()
+        self.assertIn("Risk sizing unavailable", result["error"])
 
     def test_risk_sizing_skipped_for_closing_actions(self):
         intent = build_trade_intent_from_risk_decision(

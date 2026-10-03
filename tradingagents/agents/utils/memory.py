@@ -2,7 +2,7 @@ import chromadb
 from chromadb.config import Settings
 from openai import OpenAI
 import numpy as np
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 import re
 import uuid
@@ -94,6 +94,9 @@ class FinancialSituationMemory:
         # extra_metadata (e.g. a backdated batch-taught lesson) wins.
         base_metadata = {"created_at": date.today().isoformat()}
         base_metadata.update(extra_metadata or {})
+        # Record when the lesson actually became available; backdating its
+        # trade_date/created_at must not make it available to earlier analyses.
+        base_metadata["available_at_ts"] = datetime.now(timezone.utc).timestamp()
 
         self.situation_collection.add(
             documents=situations,
@@ -110,7 +113,7 @@ class FinancialSituationMemory:
             return False
         return bool(found and found.get("ids"))
 
-    def get_memories(self, current_situation, n_matches=1):
+    def get_memories(self, current_situation, n_matches=1, as_of_date=None):
         """Find matching recommendations using OpenAI embeddings"""
         if not self.embeddings_enabled:
             return []
@@ -119,10 +122,19 @@ class FinancialSituationMemory:
         if query_embedding is None:
             return []
 
+        query_options = {}
+        if as_of_date:
+            cutoff_date = date.fromisoformat(str(as_of_date))
+            cutoff = datetime.combine(cutoff_date + timedelta(days=1), time.min, tzinfo=timezone.utc)
+            if cutoff_date < date.today():
+                # Legacy lessons lack availability metadata and are excluded
+                # from historical queries rather than assumed to be known.
+                query_options["where"] = {"available_at_ts": {"$lt": cutoff.timestamp()}}
         results = self.situation_collection.query(
             query_embeddings=[query_embedding],
             n_results=n_matches,
             include=["metadatas", "documents", "distances"],
+            **query_options,
         )
 
         matched_results = []
@@ -230,7 +242,11 @@ class TradingMemoryLog:
             return entries
         return [e for e in entries if e.get("ticker") == ticker]
 
-    def get_past_context(self, ticker: str, n_same: int = 5, n_cross: int = 3) -> str:
+    def get_past_context(self, ticker: str, n_same: int = 5, n_cross: int = 3, as_of_date=None) -> str:
+        # The legacy text format records the decision date, but not when
+        # its outcome/reflection became available. It cannot support replay.
+        if as_of_date and date.fromisoformat(str(as_of_date)) < date.today():
+            return ""
         entries = [e for e in self.load_entries() if not e.get("pending")]
         same, cross = [], []
         for entry in reversed(entries):

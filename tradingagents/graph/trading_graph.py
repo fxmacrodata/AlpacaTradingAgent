@@ -221,13 +221,15 @@ class TradingAgentsGraph:
             return None if base == "BTC" else "BTC-USD"
         return None if ticker.upper() == "SPY" else "SPY"
 
-    def _fetch_return(self, ticker: str, start_date: date, holding_days: int) -> Optional[float]:
-        if datetime.now().date() < start_date + timedelta(days=holding_days):
+    def _fetch_return(self, ticker: str, start_date: date, holding_days: int,
+                      as_of_date: Optional[date] = None) -> Optional[float]:
+        """Underlying asset return from next open to the configured bar horizon."""
+        cutoff = min(as_of_date or date.today(), date.today())
+        if holding_days < 1 or cutoff <= start_date:
             return None
-
         symbol = self._ticker_for_yfinance(ticker)
-        start = start_date.isoformat()
-        end = (start_date + timedelta(days=holding_days + 7)).isoformat()
+        start = (start_date + timedelta(days=1)).isoformat()
+        end = (cutoff + timedelta(days=1)).isoformat()
         try:
             data = yf.download(
                 symbol,
@@ -241,18 +243,18 @@ class TradingAgentsGraph:
         except Exception:
             return None
 
-        if data is None or data.empty or "Close" not in data:
+        if data is None or data.empty or "Open" not in data:
             return None
 
-        close = data["Close"]
-        if hasattr(close, "columns"):
-            close = close.iloc[:, 0]
-        close = close.dropna()
-        if len(close) < 2:
+        opens = data["Open"]
+        if hasattr(opens, "columns"):
+            opens = opens.iloc[:, 0]
+        opens = opens[[start_date < ts.date() <= cutoff for ts in opens.index]].dropna()
+        if len(opens) <= holding_days:
             return None
-        start_price = float(close.iloc[0])
-        end_price = float(close.iloc[-1])
-        if start_price == 0:
+        start_price = float(opens.iloc[0])
+        end_price = float(opens.iloc[holding_days])
+        if not (0 < start_price < float("inf") and 0 < end_price < float("inf")):
             return None
         return (end_price / start_price) - 1.0
 
@@ -274,13 +276,13 @@ class TradingAgentsGraph:
             if entry_date >= current_date:
                 continue
 
-            raw_return = self._fetch_return(ticker, entry_date, holding_days)
+            raw_return = self._fetch_return(ticker, entry_date, holding_days, as_of_date=current_date)
             if raw_return is None:
                 continue
 
             benchmark = self._benchmark_for(ticker)
             benchmark_return = (
-                self._fetch_return(benchmark, entry_date, holding_days)
+                self._fetch_return(benchmark, entry_date, holding_days, as_of_date=current_date)
                 if benchmark
                 else None
             )
@@ -291,7 +293,8 @@ class TradingAgentsGraph:
             )
             try:
                 reflection = self.reflector.reflect_on_final_decision(
-                    entry.get("decision", ""), raw_return, alpha_return
+                    entry.get("decision", "") + "\nReturn supplied is the underlying asset's next-open forward return before costs, not account PnL.",
+                    raw_return, alpha_return
                 )
             except Exception:
                 reflection = "Outcome resolved, but reflection generation failed."
@@ -336,8 +339,10 @@ class TradingAgentsGraph:
                 else "n/a"
             )
             returns_losses = (
-                f"Realized return over {holding_days} trading days: "
-                f"{raw_return:+.1%} (alpha: {alpha_text})."
+                f"Underlying asset return over {holding_days} trading bars: "
+                f"{raw_return:+.1%} (alpha: {alpha_text}). This is a hypothetical "
+                "next-open return before costs, not realized account PnL. "
+                "Evaluate the action and held position before attributing profit or loss."
             )
             memories = {
                 "bull": self.bull_memory,

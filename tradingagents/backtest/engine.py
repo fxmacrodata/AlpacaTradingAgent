@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
 import backtrader as bt
+import numpy as np
 import pandas as pd
 
 from .metrics import (
@@ -21,7 +22,7 @@ from .metrics import (
     TRADING_DAYS_PER_YEAR,
     summarize_performance,
 )
-from .signals import load_recorded_signals
+from .signals import load_recorded_signals, normalize_action
 
 
 _BPS = 1e-4  # one basis point as a fraction
@@ -108,11 +109,14 @@ class _SignalReplayStrategy(bt.Strategy):
         self.equity_values.append(float(self.broker.getvalue()))
 
         action = self._consume_signals_up_to(bar_date.isoformat())
-        if action == "BUY":
+        if action == "BUY" and self.position.size <= 0:
             self.order_target_percent(target=self.p.position_pct)
-        elif action == "SELL":
-            target = -self.p.position_pct if self.p.allow_shorts else 0.0
-            self.order_target_percent(target=target)
+        elif action == "SELL" and self.position.size > 0:
+            self.close()
+        elif action == "NEUTRAL":
+            self.close()
+        elif action == "SHORT" and self.p.allow_shorts and self.position.size >= 0:
+            self.order_target_percent(target=-self.p.position_pct)
         # HOLD / None: keep the current position untouched.
 
     def notify_order(self, order):
@@ -212,6 +216,14 @@ def normalize_price_frame(prices: pd.DataFrame) -> pd.DataFrame:
         frame["volume"] = 0.0
 
     frame = frame[["open", "high", "low", "close", "volume"]].astype(float)
+    if frame.index.hasnans or not np.isfinite(frame.to_numpy()).all():
+        raise ValueError("Price data contains missing or non-finite values.")
+    if (frame[["open", "high", "low", "close"]] <= 0).any().any() or (frame["volume"] < 0).any():
+        raise ValueError("Prices must be positive and volume non-negative.")
+    if (frame["high"] < frame[["open", "close", "low"]].max(axis=1)).any() or (
+        frame["low"] > frame[["open", "close", "high"]].min(axis=1)
+    ).any():
+        raise ValueError("OHLC prices are inconsistent with the bar's high/low.")
     frame = frame[~frame.index.duplicated(keep="last")].sort_index()
     return frame
 
@@ -244,6 +256,22 @@ def run_backtest(
     - ``"none"``: frictionless fills (not recommended outside tests).
     """
     frame = normalize_price_frame(prices)
+    inputs = [initial_cash, commission, position_pct, periods_per_year,
+              slippage_bps, slippage_vol_fraction, slippage_min_bps, slippage_max_bps]
+    if not all(np.isfinite(float(value)) for value in inputs):
+        raise ValueError("Backtest parameters must be finite.")
+    if initial_cash <= 0 or commission < 0 or not 0 < position_pct <= 1 or periods_per_year <= 0:
+        raise ValueError("Invalid cash, commission, position allocation, or annualization.")
+    if min(slippage_bps, slippage_vol_fraction, slippage_min_bps) < 0 or slippage_max_bps < slippage_min_bps:
+        raise ValueError("Slippage costs must be non-negative with max_bps >= min_bps.")
+    normalized_signals = {}
+    for day, raw_action in (signals or {}).items():
+        day = pd.Timestamp(day).date().isoformat()
+        action = normalize_action(raw_action)
+        if action is None:
+            raise ValueError(f"Unrecognized backtest action: {raw_action!r}")
+        if day <= frame.index[-1].date().isoformat():
+            normalized_signals[day] = action
 
     cerebro = bt.Cerebro()
     data_feed = bt.feeds.PandasData(dataname=frame)
@@ -278,7 +306,7 @@ def run_backtest(
     cerebro.broker.setcommission(commission=float(commission))
     cerebro.addstrategy(
         _SignalReplayStrategy,
-        signals=dict(signals or {}),
+        signals=normalized_signals,
         allow_shorts=allow_shorts,
         position_pct=position_pct,
     )
@@ -297,7 +325,7 @@ def run_backtest(
         trade_pnls=list(strategy.closed_trade_pnls),
         orders=list(strategy.executed_orders),
         metrics=metrics,
-        signals_used=len(signals or {}),
+        signals_used=len(normalized_signals),
         start_date=frame.index[0].date().isoformat(),
         end_date=frame.index[-1].date().isoformat(),
         rejected_orders=list(strategy.rejected_orders),
@@ -335,7 +363,11 @@ def run_walk_forward(
         chunk = frame.iloc[start:end]
         if len(chunk) < 2:
             break
-        result = run_backtest(chunk, signals, **backtest_kwargs)
+        first_day = chunk.index[0].date().isoformat()
+        last_day = chunk.index[-1].date().isoformat()
+        window_signals = {day: action for day, action in signals.items()
+                          if day <= last_day and (start == 0 or day >= first_day)}
+        result = run_backtest(chunk, window_signals, **backtest_kwargs)
         windows.append(
             {
                 "start_date": result.start_date,
@@ -388,7 +420,8 @@ def run_recorded_backtest(
 
         price_loader = AlpacaUtils.get_stock_data
 
-    prices = price_loader(symbol, start, end_date)
+    prices = normalize_price_frame(price_loader(symbol, start, end_date))
+    prices = prices.loc[start:end_date] if end_date else prices.loc[start:]
     backtest_kwargs.setdefault(
         "periods_per_year",
         CRYPTO_DAYS_PER_YEAR if "/" in symbol else TRADING_DAYS_PER_YEAR,
@@ -425,7 +458,8 @@ def run_recorded_walk_forward(
 
         price_loader = AlpacaUtils.get_stock_data
 
-    prices = price_loader(symbol, start, end_date)
+    prices = normalize_price_frame(price_loader(symbol, start, end_date))
+    prices = prices.loc[start:end_date] if end_date else prices.loc[start:]
     backtest_kwargs.setdefault(
         "periods_per_year",
         CRYPTO_DAYS_PER_YEAR if "/" in symbol else TRADING_DAYS_PER_YEAR,
