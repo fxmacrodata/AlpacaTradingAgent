@@ -29,6 +29,7 @@ Edit `.env` — the minimum to run:
 | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) (or set `LLM_PROVIDER` to another provider) | ✅ |
 | `FINNHUB_API_KEY` | [finnhub.io](https://finnhub.io) — richer news | optional |
 | `FRED_API_KEY` | [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html) — macro analyst | optional |
+| `FXMACRODATA_API_KEY` | [fxmacrodata.com](https://fxmacrodata.com/?utm_source=github&utm_medium=referral&utm_campaign=AlpacaTradingAgent&utm_content=quickstart) — non-US macro, release calendar, FX rates for the macro analyst | optional |
 | `COINDESK_API_KEY` | crypto news | optional |
 
 > **Keep `ALPACA_USE_PAPER=True`.** Everything works against the paper

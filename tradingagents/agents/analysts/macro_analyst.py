@@ -23,6 +23,7 @@ def create_macro_analyst(llm, toolkit):
             ticker = state.get("company_of_interest", "MARKET")
             fred_available = toolkit.has_fred()
             openai_available = toolkit.has_openai_web_search()
+            fxmacrodata_available = toolkit.has_fxmacrodata()
             
             # print(f"[MACRO] Analyzing macro environment on {current_date}")
             
@@ -35,12 +36,23 @@ def create_macro_analyst(llm, toolkit):
                         toolkit.get_yield_curve_analysis,
                     ]
                 )
+            if fxmacrodata_available:
+                tools.extend(
+                    [
+                        toolkit.get_global_macro_indicators,
+                        toolkit.get_economic_release_calendar,
+                    ]
+                )
+                if toolkit.has_fxmacrodata_key():
+                    tools.append(toolkit.get_fx_rates)
             if toolkit.config["online_tools"] and openai_available:
                 tools.append(toolkit.get_macro_news_openai)
 
             active_sources = []
             if fred_available:
                 active_sources.append("FRED macro data")
+            if fxmacrodata_available:
+                active_sources.append("FXMacroData global macro releases and calendar")
             macro_news_available = toolkit.config["online_tools"] and openai_available
             if macro_news_available:
                 active_sources.append("OpenAI macro web search")

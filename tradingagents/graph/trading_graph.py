@@ -407,6 +407,9 @@ class TradingAgentsGraph:
                     self.toolkit.get_economic_indicators,
                     self.toolkit.get_yield_curve_analysis,
                     self.toolkit.get_macro_news_openai,
+                    self.toolkit.get_global_macro_indicators,
+                    self.toolkit.get_economic_release_calendar,
+                    self.toolkit.get_fx_rates,
                 ]
             ),
         }

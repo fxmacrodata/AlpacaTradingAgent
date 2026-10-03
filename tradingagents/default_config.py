@@ -175,4 +175,11 @@ DEFAULT_CONFIG = {
     "alpaca_secret_key": None,
     "alpaca_use_paper": "True",  # Set to "True" to use paper trading, "False" for live trading
     "coindesk_api_key": None,
+    # FXMacroData (non-US macro releases, release calendar, FX rates). Off unless
+    # fxmacrodata_api_key / FXMACRODATA_API_KEY is set or fxmacrodata_enabled is True.
+    # Without a key only USD is returned.
+    "fxmacrodata_api_key": None,
+    "fxmacrodata_enabled": False,
+    "fxmacrodata_currencies": ["USD", "EUR", "GBP", "JPY"],
+    "fxmacrodata_fx_pairs": ["EUR/USD", "USD/JPY", "GBP/USD"],
 }

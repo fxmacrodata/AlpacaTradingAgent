@@ -237,5 +237,20 @@ def get_coindesk_api_key() -> str:
     return get_api_key("coindesk_api_key", "COINDESK_API_KEY")
 
 
+def get_fxmacrodata_api_key() -> str:
+    """Get FXMacroData API key from runtime, environment variables, or config."""
+    return get_api_key("fxmacrodata_api_key", "FXMACRODATA_API_KEY")
+
+
+def is_fxmacrodata_enabled() -> bool:
+    """FXMacroData tools are on when a key is set, or when explicitly enabled for keyless USD."""
+    if get_fxmacrodata_api_key():
+        return True
+    env_value = os.getenv("FXMACRODATA_ENABLED")
+    if env_value is not None:
+        return _coerce_bool(env_value)
+    return _coerce_bool(get_config().get("fxmacrodata_enabled", False))
+
+
 # Initialize with default config
 initialize_config()

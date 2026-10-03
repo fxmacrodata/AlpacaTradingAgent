@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI
 import tradingagents.dataflows.interface as interface
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.run_logger import get_run_audit_logger
-from tradingagents.dataflows.config import get_api_key
+from tradingagents.dataflows.config import get_api_key, is_fxmacrodata_enabled
 import json
 import time
 from functools import wraps
@@ -584,6 +584,15 @@ class Toolkit:
 
     def has_coindesk(self) -> bool:
         return self._has_key("coindesk_api_key", "COINDESK_API_KEY")
+
+    def has_fxmacrodata(self) -> bool:
+        try:
+            return is_fxmacrodata_enabled()
+        except Exception:
+            return False
+
+    def has_fxmacrodata_key(self) -> bool:
+        return self._has_key("fxmacrodata_api_key", "FXMACRODATA_API_KEY")
 
     def has_simfin_data(self) -> bool:
         data_dir = self.config.get("data_dir", "")
@@ -1196,6 +1205,77 @@ class Toolkit:
         yield_curve_results = interface.get_yield_curve_analysis(curr_date)
         
         return yield_curve_results
+
+    @staticmethod
+    @tool
+    @timing_wrapper("MACRO")
+    def get_global_macro_indicators(
+        curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+        currencies: Annotated[str, "Comma-separated currency codes, e.g. 'USD,EUR,GBP,JPY'. Empty uses the configured list"] = "",
+    ) -> str:
+        """
+        Retrieve the latest policy rate, inflation, core inflation, unemployment, GDP and
+        2Y/10Y government bond yields for major economies (FXMacroData).
+        Use this for non-US central bank and growth context alongside the FRED tools.
+        Historical dates require verified publication vintages; unverified values are omitted.
+
+        Args:
+            curr_date (str): Current date in yyyy-mm-dd format
+            currencies (str): Comma-separated currency codes (empty = configured default)
+
+        Returns:
+            str: One table per currency with latest value, previous value and change
+        """
+
+        return interface.get_global_macro_indicators(curr_date, currencies)
+
+    @staticmethod
+    @tool
+    @timing_wrapper("MACRO")
+    def get_economic_release_calendar(
+        curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+        currencies: Annotated[str, "Comma-separated currency codes, e.g. 'USD,EUR,GBP,JPY'. Empty uses the configured list"] = "",
+        days_ahead: Annotated[int, "Number of days ahead to include"] = 10,
+    ) -> str:
+        """
+        Retrieve scheduled economic data releases (CPI, payrolls, GDP, central bank
+        decisions, ...) with dates, times and importance for the swing window (FXMacroData).
+        This is the current schedule, not a historical schedule vintage for strict backtests.
+
+        Args:
+            curr_date (str): Current date in yyyy-mm-dd format
+            currencies (str): Comma-separated currency codes (empty = configured default)
+            days_ahead (int): Number of days ahead to include (default 10)
+
+        Returns:
+            str: Markdown table of upcoming releases sorted by time
+        """
+
+        return interface.get_economic_release_calendar(curr_date, currencies, days_ahead)
+
+    @staticmethod
+    @tool
+    @timing_wrapper("MACRO")
+    def get_fx_rates(
+        curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
+        pairs: Annotated[str, "Comma-separated currency pairs, e.g. 'EUR/USD,USD/JPY'. Empty uses the configured list"] = "",
+        lookback_days: Annotated[int, "Number of days to look back for data"] = 30,
+    ) -> str:
+        """
+        Retrieve FX reference rates for major currency pairs with change and range over
+        the lookback window (FXMacroData).
+        Publication-time availability is not verified for strict backtests.
+
+        Args:
+            curr_date (str): Current date in yyyy-mm-dd format
+            pairs (str): Comma-separated currency pairs (empty = configured default)
+            lookback_days (int): Number of days to look back (default 30)
+
+        Returns:
+            str: Markdown table with latest rate, change and range per pair
+        """
+
+        return interface.get_fx_rates(curr_date, pairs, lookback_days)
 
     @staticmethod
     @tool
