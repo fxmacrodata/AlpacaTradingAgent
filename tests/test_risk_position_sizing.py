@@ -436,7 +436,11 @@ class ExecuteTradeIntentRiskSizingTests(unittest.TestCase):
 
 class CalcQtyPriceFailureTests(unittest.TestCase):
     def test_buy_without_price_data_fails_instead_of_guessing_quantity(self):
-        with patch.object(
+        disabled_guard = MagicMock()
+        disabled_guard.enabled = False
+        with patch(
+            "tradingagents.safety.get_safety_guard", return_value=disabled_guard
+        ), patch.object(
             AlpacaUtils, "get_latest_quote", return_value={}
         ), patch.object(AlpacaUtils, "place_market_order") as place_order:
             result = AlpacaUtils.execute_trading_action(

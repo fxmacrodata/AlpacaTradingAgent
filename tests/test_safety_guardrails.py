@@ -262,6 +262,9 @@ class ExecutionIntegrationTests(unittest.TestCase):
             AlpacaUtils, "place_market_order", return_value={"success": True}
         ), patch.object(
             AlpacaUtils, "get_latest_quote", return_value={"bid_price": 100.0}
+        ), patch.object(
+            AlpacaUtils, "_safety_context",
+            return_value=({"equity": 100_000.0, "last_equity": 100_000.0}, 0.0),
         ):
             AlpacaUtils.execute_trading_action(
                 symbol="AAPL",
