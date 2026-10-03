@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Annotated, Dict, List, Optional
 from .config import get_api_key, DATA_DIR
+from .ticker_utils import TickerUtils
 import os
 import pandas as pd
 
@@ -10,7 +11,7 @@ import pandas as pd
 def get_earnings_calendar_api_key():
     """Get earnings calendar API key from config or environment"""
     # Try to get from config first, then environment
-    api_key = get_api_key("EARNINGS_CALENDAR_API_KEY")
+    api_key = get_api_key("earnings_calendar_api_key", "EARNINGS_CALENDAR_API_KEY")
     if not api_key:
         api_key = os.getenv("EARNINGS_CALENDAR_API_KEY")
     return api_key
@@ -187,8 +188,7 @@ def get_earnings_calendar_data(
         Formatted string with earnings/events data
     """
     # Determine if this is a crypto or stock ticker
-    crypto_indicators = ["BTC", "ETH", "ADA", "SOL", "DOGE", "MATIC", "AVAX", "DOT", "LINK", "UNI"]
-    is_crypto = any(indicator in ticker.upper() for indicator in crypto_indicators) or "USD" in ticker.upper()
+    is_crypto = TickerUtils.standardize_ticker(ticker)["is_crypto"]
     
     if is_crypto:
         return get_crypto_earnings_equivalent(ticker, start_date, end_date)
@@ -244,4 +244,4 @@ def get_earnings_surprises_analysis(
         return result
         
     except Exception as e:
-        return f"Error analyzing earnings surprises for {ticker}: {str(e)}" 
+        return f"Error analyzing earnings surprises for {ticker}: {str(e)}"

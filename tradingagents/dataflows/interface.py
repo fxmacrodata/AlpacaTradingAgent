@@ -954,6 +954,8 @@ _INDICATOR_ALIAS_MAP = {
     "close_20_sma": "sma_20",
     "sma_50": "sma_50",
     "close_50_sma": "sma_50",
+    "sma_200": "sma_200",
+    "close_200_sma": "sma_200",
     "rsi": "rsi_14",
     "rsi_14": "rsi_14",
     "adx": "adx_14",
@@ -969,6 +971,11 @@ _INDICATOR_ALIAS_MAP = {
     "stoch_d": "stoch_d",
     "obv": "obv",
     "volume_delta": "volume_delta",
+}
+
+_INDICATOR_GROUPS = {
+    "stochrsi_14": ["stoch_k", "stoch_d"],
+    "bbands": ["boll_ub", "boll_lb"],
 }
 
 _TIMEFRAME_TO_BRIEF_KEY = {
@@ -1027,7 +1034,7 @@ def _format_indicator_history_table(
 
 def get_stockstats_indicator_history(
     symbol: Annotated[str, "ticker symbol (stocks: AAPL, NVDA; crypto: ETH/USD, BTC/USD)"],
-    indicator: Annotated[str, "indicator name (e.g. rsi_14, macd, close_8_ema, all)"],
+    indicator: Annotated[str, "Indicator name, comma-separated names, or all"],
     curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
     timeframe: Annotated[str, "Chart timeframe: 1Hour, 4Hour, 1Day"] = "1Day",
     look_back_days: Annotated[int, "Calendar days to include in history window"] = 60,
@@ -1061,7 +1068,7 @@ def get_stockstats_indicator_history(
 
     end_ts = pd.to_datetime(curr_date, utc=True) + pd.Timedelta(days=1)
     start_ts = end_ts - pd.Timedelta(days=max(1, int(look_back_days)))
-    df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] <= end_ts)]
+    df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
     if df.empty:
         return (
             f"No indicator points found for {symbol} in lookback window {look_back_days} days "
@@ -1089,14 +1096,18 @@ def get_stockstats_indicator_history(
             "volume",
         ]
     else:
-        canonical = _INDICATOR_ALIAS_MAP.get(requested)
-        if not canonical:
-            supported = ", ".join(sorted(_INDICATOR_ALIAS_MAP.keys()))
-            return (
-                f"Error: unsupported indicator '{indicator}'. "
-                f"Supported indicators: {supported}, all."
-            )
-        columns = [canonical]
+        columns = []
+        for name in requested.split(","):
+            name = name.strip()
+            canonical = _INDICATOR_ALIAS_MAP.get(name)
+            group = [canonical] if canonical else _INDICATOR_GROUPS.get(name)
+            if not group:
+                supported = ", ".join(sorted(set(_INDICATOR_ALIAS_MAP) | set(_INDICATOR_GROUPS)))
+                return (
+                    f"Error: unsupported indicator '{name}'. "
+                    f"Supported indicators: {supported}, all."
+                )
+            columns.extend(col for col in group if col not in columns)
 
     for col in columns:
         df = _ensure_indicator_column(df, col)

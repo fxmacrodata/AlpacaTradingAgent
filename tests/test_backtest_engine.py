@@ -109,10 +109,10 @@ class SignalNormalizationTests(unittest.TestCase):
         for raw, expected in {
             "BUY": "BUY",
             "long": "BUY",
-            " Short ": "SELL",
+            " Short ": "SHORT",
             "sell": "SELL",
             "HOLD": "HOLD",
-            "Neutral": "HOLD",
+            "Neutral": "NEUTRAL",
         }.items():
             with self.subTest(raw=raw):
                 self.assertEqual(normalize_action(raw), expected)
@@ -132,6 +132,7 @@ def write_run_log(root, symbol, trade_date, final_signal, status="completed", st
         "symbol": symbol,
         "trade_date": trade_date,
         "started_at": started,
+        "ended_at": started,
         "status": status,
         "summary": {"final_signal": final_signal} if final_signal else {},
     }
@@ -149,7 +150,7 @@ class LoadRecordedSignalsTests(unittest.TestCase):
             signals = load_recorded_signals("AAPL", eval_results_dir=root)
         self.assertEqual(
             signals,
-            {"2026-01-05": "BUY", "2026-01-06": "BUY", "2026-01-07": "HOLD"},
+            {"2026-01-05": "BUY", "2026-01-06": "BUY", "2026-01-07": "NEUTRAL"},
         )
 
     def test_ignores_aborted_missing_signal_and_bad_dates(self):
@@ -271,7 +272,7 @@ class RunBacktestTests(unittest.TestCase):
         prices = make_prices(closes)
         result = run_backtest(
             prices,
-            {"2026-01-05": "SELL"},
+            {"2026-01-05": "SHORT"},
             initial_cash=100_000,
             commission=0.0,
             allow_shorts=True,

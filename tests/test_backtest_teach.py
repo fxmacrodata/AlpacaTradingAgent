@@ -71,6 +71,7 @@ def _write_run(root, symbol, trade_date, final_signal, final_state=None, status=
         "symbol": symbol,
         "trade_date": trade_date,
         "started_at": started,
+        "ended_at": started,
         "status": status,
         "summary": {"final_signal": final_signal},
         "snapshots": {"final_state": final_state} if final_state is not None else {},
@@ -105,21 +106,21 @@ class ComputeDecisionOutcomesTests(unittest.TestCase):
         self.assertAlmostEqual(out["decision_return"], out["asset_return"])
         self.assertFalse(out["partial"])
 
-    def test_sell_decision_return_is_negated(self):
+    def test_short_decision_return_is_negated(self):
         prices = _price_frame(days=10)
         outcomes = compute_decision_outcomes(
-            prices, {"2025-01-06": "SELL"}, horizon_bars=3
+            prices, {"2025-01-06": "SHORT"}, horizon_bars=3
         )
         out = outcomes[0]
         self.assertAlmostEqual(out["decision_return"], -(out["asset_return"]))
 
-    def test_hold_decision_return_is_zero_but_asset_move_kept(self):
+    def test_hold_does_not_invent_a_return_without_position_history(self):
         prices = _price_frame(days=10)
         outcomes = compute_decision_outcomes(
             prices, {"2025-01-06": "HOLD"}, horizon_bars=3
         )
         out = outcomes[0]
-        self.assertEqual(out["decision_return"], 0.0)
+        self.assertIsNone(out["decision_return"])
         self.assertGreater(out["asset_return"], 0.0)
 
     def test_truncated_horizon_is_partial(self):
@@ -146,8 +147,8 @@ class ComputeDecisionOutcomesTests(unittest.TestCase):
             prices, {"2025-01-11": "BUY"}, horizon_bars=2
         )
         self.assertEqual(len(outcomes), 1)
-        # First bar strictly after 2025-01-11 is Mon 2025-01-13 (open 105).
-        self.assertEqual(outcomes[0]["entry_price"], 105.0)
+        # Daily replay consumes the signal at Monday's close and fills Tuesday.
+        self.assertEqual(outcomes[0]["entry_price"], 106.0)
 
 
 class TeachMemoriesTests(unittest.TestCase):

@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from .alpaca_utils import AlpacaUtils
+from .config import get_config
 from .ta_schema import (
     Direction,
     KeyLevel,
@@ -36,12 +37,12 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 # ── Timeframe config ─────────────────────────────────────────────────────
 
-# (alpaca_tf_string, lookback_calendar_days)  -- enough bars for 50-period
-# indicators plus some buffer.
+# (alpaca_tf_string, lookback_calendar_days): allow warmup for SMA200.
+# Short listings and sparse feeds can still lack enough bars; retain NaN.
 TIMEFRAMES: Dict[str, Tuple[str, int]] = {
-    "1h": ("1Hour", 30),      # ~30 days of hourly bars ≈ 200 bars
-    "4h": ("4Hour", 90),      # ~90 days of 4h bars ≈ 540 bars
-    "1d": ("1Day", 200),      # 200 calendar days ≈ 140 trading days
+    "1h": ("1Hour", 60),
+    "4h": ("4Hour", 180),
+    "1d": ("1Day", 400),
 }
 
 
@@ -153,6 +154,9 @@ def compute_indicators(
     or ``None`` if data is unavailable.
     """
     alpaca_tf, lookback_days = TIMEFRAMES[timeframe_key]
+    lookback_days = int(get_config().get("technical_lookback_days", {}).get(timeframe_key, lookback_days))
+    if lookback_days <= 0:
+        raise ValueError("Technical lookback days must be positive")
     curr_dt = pd.to_datetime(curr_date)
     start_dt = curr_dt - timedelta(days=lookback_days)
 

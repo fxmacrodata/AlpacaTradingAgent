@@ -91,6 +91,7 @@ DEFAULT_CONFIG = {
     # Portfolio-level intelligence (deterministic sizing above per-symbol decisions)
     "portfolio_intelligence_enabled": True,  # Master switch for portfolio-aware sizing of new long exposure
     "portfolio_lookback_bars": 60,  # Daily bars used for correlation / volatility estimates
+    "portfolio_min_overlap_bars": 20,
     "portfolio_high_correlation": 0.6,  # Positive correlation above this = duplicated risk
     "portfolio_correlated_size_factor": 0.5,  # Size multiplier applied on a correlation hit
     "portfolio_vol_sizing_enabled": True,  # Inverse-volatility (simplified risk parity) sizing
@@ -100,6 +101,14 @@ DEFAULT_CONFIG = {
     # Market regime detection (deterministic, fit-free; filter not signal)
     "regime_detection_enabled": True,  # Inject regime block into the market report and scale sizing
     "regime_vol_window": 20,  # Bars for realized-volatility estimate
+    "regime_vol_percentile_window": 252,
+    "regime_calm_percentile": 40.0,
+    "regime_trend_slope_bars": 5,
+    "regime_liquidity_window": 20,
+    "regime_liquidity_baseline_window": 60,
+    "regime_surging_liquidity_ratio": 1.5,
+    "regime_equity_periods_per_year": 252,
+    "regime_crypto_periods_per_year": 365,
     "regime_turbulent_percentile": 75.0,  # Vol percentile above which the regime is turbulent
     "regime_turbulent_abs_annual_vol_pct": 40.0,  # Absolute annualized-vol floor for turbulence
     "regime_trend_window": 50,  # SMA window for the trend dimension
@@ -139,6 +148,10 @@ DEFAULT_CONFIG = {
     "max_tool_iterations_per_agent": 8,  # Max tool-call loop turns per analyst node
     "max_same_tool_call_repeats": 1,  # Max repeats for the same tool+args signature in a single analyst node
     # Tool settings
+    "macro_request_timeout_seconds": 20,
+    "macro_flat_curve_threshold_bps": 50.0,
+    "technical_lookback_days": {"1h": 60, "4h": 180, "1d": 400},
+    "news_request_timeout_seconds": 20,
     "online_tools": True,
     "tool_semantic_retry_enabled": True,  # Retry web-search tool calls once on low-quality interactive/undersized output
     "tool_semantic_retry_max_retries": 1,

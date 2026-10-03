@@ -334,7 +334,7 @@ class ExecuteTradeIntentRiskSizingTests(unittest.TestCase):
             95.0,
         )
 
-    def test_risk_engine_data_failure_fails_open_with_warning(self):
+    def test_risk_engine_data_failure_blocks_new_exposure(self):
         with patch.object(
             AlpacaUtils,
             "get_account_risk_snapshot",
@@ -353,12 +353,10 @@ class ExecuteTradeIntentRiskSizingTests(unittest.TestCase):
                 risk_params={},
             )
 
-        self.assertTrue(result["success"])
+        self.assertFalse(result["success"])
         self.assertFalse(result["risk_sizing"]["applied"])
-        self.assertEqual(execute.call_args.kwargs["dollar_amount"], 50_000)
-        self.assertTrue(
-            any("risk sizing" in w.lower() for w in result["intent_warnings"])
-        )
+        execute.assert_not_called()
+        self.assertIn("Risk sizing unavailable", result["error"])
 
     def test_risk_sizing_skipped_for_closing_actions(self):
         intent = build_trade_intent_from_risk_decision(
@@ -438,7 +436,11 @@ class ExecuteTradeIntentRiskSizingTests(unittest.TestCase):
 
 class CalcQtyPriceFailureTests(unittest.TestCase):
     def test_buy_without_price_data_fails_instead_of_guessing_quantity(self):
-        with patch.object(
+        disabled_guard = MagicMock()
+        disabled_guard.enabled = False
+        with patch(
+            "tradingagents.safety.get_safety_guard", return_value=disabled_guard
+        ), patch.object(
             AlpacaUtils, "get_latest_quote", return_value={}
         ), patch.object(AlpacaUtils, "place_market_order") as place_order:
             result = AlpacaUtils.execute_trading_action(

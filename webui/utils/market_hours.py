@@ -6,62 +6,18 @@ import datetime
 import pytz
 from typing import List, Tuple, Dict, Any
 
-# US stock market holidays (simplified - in production, use a proper holidays library)
-US_MARKET_HOLIDAYS_2024 = [
-    "2024-01-01",  # New Year's Day
-    "2024-01-15",  # Martin Luther King Jr. Day
-    "2024-02-19",  # Presidents' Day
-    "2024-03-29",  # Good Friday
-    "2024-05-27",  # Memorial Day
-    "2024-06-19",  # Juneteenth
-    "2024-07-04",  # Independence Day
-    "2024-09-02",  # Labor Day
-    "2024-11-28",  # Thanksgiving Day
-    "2024-12-25",  # Christmas Day
-]
+from functools import lru_cache
 
-US_MARKET_HOLIDAYS_2025 = [
-    "2025-01-01",  # New Year's Day
-    "2025-01-20",  # Martin Luther King Jr. Day
-    "2025-02-17",  # Presidents' Day
-    "2025-04-18",  # Good Friday
-    "2025-05-26",  # Memorial Day
-    "2025-06-19",  # Juneteenth
-    "2025-07-04",  # Independence Day
-    "2025-09-01",  # Labor Day
-    "2025-11-27",  # Thanksgiving Day
-    "2025-12-25",  # Christmas Day
-]
+import exchange_calendars as xcals
 
-US_MARKET_HOLIDAYS_2026 = [
-    "2026-01-01",  # New Year's Day
-    "2026-01-19",  # Martin Luther King Jr. Day
-    "2026-02-16",  # Presidents' Day
-    "2026-04-03",  # Good Friday
-    "2026-05-25",  # Memorial Day
-    "2026-06-19",  # Juneteenth
-    "2026-07-03",  # Independence Day observed
-    "2026-09-07",  # Labor Day
-    "2026-11-26",  # Thanksgiving Day
-    "2026-12-25",  # Christmas Day
-]
+# Whole-hour scheduling slots inside a regular NYSE session.
+MARKET_OPEN_HOUR = 10
+MARKET_CLOSE_HOUR = 15
 
-US_MARKET_HOLIDAYS_2027 = [
-    "2027-01-01",  # New Year's Day
-    "2027-01-18",  # Martin Luther King Jr. Day
-    "2027-02-15",  # Presidents' Day
-    "2027-03-26",  # Good Friday
-    "2027-05-31",  # Memorial Day
-    "2027-06-18",  # Juneteenth observed
-    "2027-07-05",  # Independence Day observed
-    "2027-09-06",  # Labor Day
-    "2027-11-25",  # Thanksgiving Day
-    "2027-12-24",  # Christmas Day observed
-]
 
-# Market regular hours (EST/EDT)
-MARKET_OPEN_HOUR = 9   # 9:30 AM (use 9 for conservative approach)
-MARKET_CLOSE_HOUR = 16  # 4:00 PM
+@lru_cache(maxsize=8)
+def _calendar(year: int):
+    return xcals.get_calendar("XNYS", start=f"{year}-01-01", end=f"{year}-12-31")
 
 
 def _get_eastern_timezone():
@@ -130,26 +86,17 @@ def is_market_open(target_datetime: datetime.datetime = None) -> Tuple[bool, str
     if target_datetime.weekday() >= 5:  # Saturday = 5, Sunday = 6
         return False, "Market is closed on weekends"
     
-    # Check if it's a holiday
-    date_str = target_datetime.strftime("%Y-%m-%d")
-    all_holidays = (
-        US_MARKET_HOLIDAYS_2024
-        + US_MARKET_HOLIDAYS_2025
-        + US_MARKET_HOLIDAYS_2026
-        + US_MARKET_HOLIDAYS_2027
-    )
-    if date_str in all_holidays:
-        return False, f"Market is closed for holiday on {date_str}"
-    
-    # Check if it's within market hours (9:30 AM - 4:00 PM EST/EDT)
-    market_open = target_datetime.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = target_datetime.replace(hour=16, minute=0, second=0, microsecond=0)
-    
+    calendar = _calendar(target_datetime.year)
+    day = target_datetime.date().isoformat()
+    if not calendar.is_session(day):
+        return False, f"Market is closed for holiday on {day}"
+    market_open = calendar.session_open(day).to_pydatetime()
+    market_close = calendar.session_close(day).to_pydatetime()
     if target_datetime < market_open:
-        return False, f"Market opens at 9:30 AM EST/EDT (currently {target_datetime.strftime('%I:%M %p %Z')})"
-    elif target_datetime > market_close:
-        return False, f"Market closed at 4:00 PM EST/EDT (currently {target_datetime.strftime('%I:%M %p %Z')})"
-    
+        return False, f"Market opens at {market_open.astimezone(_get_eastern_timezone()):%I:%M %p %Z}"
+    if target_datetime >= market_close:
+        return False, f"Market closed at {market_close.astimezone(_get_eastern_timezone()):%I:%M %p %Z}"
+
     return True, "Market is open"
 
 def get_next_market_datetime(target_hour: int, from_datetime: datetime.datetime = None) -> datetime.datetime:
@@ -164,29 +111,21 @@ def get_next_market_datetime(target_hour: int, from_datetime: datetime.datetime 
         Next datetime when market will be open at the target hour
     """
     from_datetime = _coerce_to_eastern(from_datetime)
-    
-    # Start with today at the target hour
-    target_dt = from_datetime.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-    
-    # If the target time today has already passed, start with tomorrow
-    if target_dt <= from_datetime:
-        target_dt += datetime.timedelta(days=1)
-        
-    # Keep advancing until we find a valid market day
-    max_attempts = 10  # Prevent infinite loops
-    attempts = 0
-    
-    while attempts < max_attempts:
-        is_open, reason = is_market_open(target_dt)
-        if is_open:
-            return target_dt
-        
-        # Move to next day
-        target_dt += datetime.timedelta(days=1)
-        attempts += 1
-    
-    # Fallback - return the target datetime even if we couldn't validate
-    return target_dt
+
+    if not MARKET_OPEN_HOUR <= target_hour <= MARKET_CLOSE_HOUR:
+        raise ValueError("Choose a whole hour from 10 through 15 Eastern, within the regular session.")
+    eastern = _get_eastern_timezone()
+    # Enumerate actual sessions, including early closes, and localize each
+    # date separately so crossing DST does not retain yesterday's UTC offset.
+    for year in (from_datetime.year, from_datetime.year + 1):
+        for session in _calendar(year).sessions:
+            if session.date() < from_datetime.date():
+                continue
+            target_dt = eastern.localize(datetime.datetime.combine(session.date(), datetime.time(target_hour)))
+            if target_dt > from_datetime and is_market_open(target_dt)[0]:
+                return target_dt
+    raise ValueError("No valid market session found for the requested hour.")
+
 
 def format_market_hours_info(hours: List[int]) -> Dict[str, Any]:
     """
@@ -202,6 +141,7 @@ def format_market_hours_info(hours: List[int]) -> Dict[str, Any]:
         return {"error": "No hours provided"}
     
     # Format hours for display
+    hours = sorted(set(hours))
     formatted_hours = []
     for hour in sorted(hours):
         if hour == 0:
@@ -231,4 +171,4 @@ def format_market_hours_info(hours: List[int]) -> Dict[str, Any]:
         "formatted_hours": hours_str,
         "next_executions": next_executions,
         "market_timezone": "US/Eastern"
-    } 
+    }

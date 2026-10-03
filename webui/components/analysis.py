@@ -5,7 +5,7 @@ webui/components/analysis.py
 import time
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.graph.checkpointer import clear_checkpoint
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.dataflows.config import get_config
 from tradingagents.run_logger import get_run_audit_logger
 from tradingagents.dataflows.alpaca_utils import AlpacaUtils
 from tradingagents.agents.schemas import trade_intent_action
@@ -47,7 +47,7 @@ def execute_trade_after_analysis(ticker, allow_shorts, trade_amount):
         # Get the recommended action
         recommended_action = state.get("recommended_action")
         print(f"[TRADE] Direct recommended_action: {recommended_action}")
-        if not recommended_action and intent_action:
+        if intent_action:
             recommended_action = intent_action
 
         if not recommended_action:
@@ -69,7 +69,7 @@ def execute_trade_after_analysis(ticker, allow_shorts, trade_amount):
 
         # Portfolio-level sizing: deterministic layer above the per-symbol
         # decision (correlation penalty, inverse-vol sizing, gross exposure
-        # cap). Failure-isolated: any problem keeps the requested amount.
+        # cap). Unavailable account risk data blocks new exposure.
         try:
             from tradingagents.dataflows.config import get_config
             from tradingagents.portfolio import (
@@ -78,21 +78,23 @@ def execute_trade_after_analysis(ticker, allow_shorts, trade_amount):
                 gather_portfolio_state_via_alpaca,
             )
 
+            portfolio_config = PortfolioLimitsConfig.from_config(get_config())
             trade_amount = adjust_new_position_notional(
                 symbol=ticker,
                 action=recommended_action,
                 requested_notional=trade_amount,
-                gather_state=lambda: gather_portfolio_state_via_alpaca(ticker),
-                config=PortfolioLimitsConfig.from_config(get_config() or {}),
+                gather_state=lambda: gather_portfolio_state_via_alpaca(ticker, lookback_bars=portfolio_config.lookback_bars),
+                config=portfolio_config,
             )
             if trade_amount <= 0:
                 print(
                     f"[TRADE] Portfolio layer zeroed the {ticker} order "
-                    "(no gross-exposure headroom); skipping execution."
+                    "(new exposure blocked); existing positions can still close."
                 )
-                return
         except Exception as exc:
             print(f"[TRADE] Portfolio sizing unavailable for {ticker}: {exc}")
+            if str(recommended_action).upper() in ("BUY", "LONG", "SHORT"):
+                trade_amount = 0.0
 
         # Regime-aware sizing: hostile regimes shrink NEW exposure, never
         # flip the decision. Failure-isolated - any problem keeps the
@@ -137,9 +139,10 @@ def execute_trade_after_analysis(ticker, allow_shorts, trade_amount):
         # Execute the typed intent when present; fall back to legacy signal execution
         # for older runs or providers that could not produce structured output.
         if trade_intent:
+            execution_config = get_config()
             risk_params = (
-                dict(DEFAULT_CONFIG.get("risk_sizing_params") or {})
-                if DEFAULT_CONFIG.get("risk_sizing_enabled")
+                dict(execution_config.get("risk_sizing_params") or {})
+                if execution_config.get("risk_sizing_enabled")
                 else None
             )
             result = AlpacaUtils.execute_trade_intent(
@@ -242,7 +245,8 @@ def run_analysis(
     try:
         # Always use current date for real-time analysis
         from datetime import datetime
-        current_date = datetime.now().strftime("%Y-%m-%d")
+        from zoneinfo import ZoneInfo
+        current_date = datetime.now(ZoneInfo("UTC" if "/" in ticker else "America/New_York")).strftime("%Y-%m-%d")
 
         print(f"Starting real-time analysis for {ticker} with current date: {current_date}")
         current_state = app_state.get_state(ticker)
@@ -263,13 +267,12 @@ def run_analysis(
             depth_level = depth_map.get(research_depth_config, "Medium")
 
         # Create config with selected options
-        config = DEFAULT_CONFIG.copy()
+        config = get_config()
         config["max_debate_rounds"] = depth_rounds
         config["max_risk_discuss_rounds"] = depth_rounds
         config["research_depth"] = depth_level  # String for LLM parameter mapping
         config["allow_shorts"] = allow_shorts
         config["trading_mode"] = "trading" if allow_shorts else "investment"
-        config["parallel_analysts"] = True  # Run analysts in parallel for faster execution
         config["quick_think_llm"] = quick_llm
         config["deep_think_llm"] = deep_llm
         config["quick_llm_params"] = quick_llm_params or {}

@@ -33,3 +33,4 @@ dash>=3.0.0
 dash-bootstrap-components>=2.0.0
 flask>=3.0.0
 alpaca-py>=0.8.2
+exchange-calendars>=4.11,<5

@@ -32,9 +32,6 @@ from typing import Callable, Dict, Optional
 
 import pandas as pd
 
-_ANNUALIZATION = math.sqrt(252)
-
-
 @dataclass
 class RegimeConfig:
     enabled: bool = True
@@ -53,6 +50,8 @@ class RegimeConfig:
     downtrend_size_factor: float = 0.75
     thin_liquidity_size_factor: float = 0.85
     min_risk_multiplier: float = 0.25
+    equity_periods_per_year: int = 252
+    crypto_periods_per_year: int = 365
 
     @classmethod
     def from_config(cls, config: Optional[dict]) -> "RegimeConfig":
@@ -60,6 +59,14 @@ class RegimeConfig:
         mapping = {
             "enabled": "regime_detection_enabled",
             "vol_window": "regime_vol_window",
+            "vol_percentile_window": "regime_vol_percentile_window",
+            "calm_percentile": "regime_calm_percentile",
+            "trend_slope_bars": "regime_trend_slope_bars",
+            "liquidity_window": "regime_liquidity_window",
+            "liquidity_baseline_window": "regime_liquidity_baseline_window",
+            "surging_liquidity_ratio": "regime_surging_liquidity_ratio",
+            "equity_periods_per_year": "regime_equity_periods_per_year",
+            "crypto_periods_per_year": "regime_crypto_periods_per_year",
             "turbulent_percentile": "regime_turbulent_percentile",
             "turbulent_abs_annual_vol_pct": "regime_turbulent_abs_annual_vol_pct",
             "trend_window": "regime_trend_window",
@@ -156,7 +163,7 @@ def classify_regime(
         return unknown
 
     closes = frame["close"].astype(float)
-    returns = closes.pct_change().dropna()
+    returns = closes.pct_change(fill_method=None).dropna()
     if len(returns) < config.vol_window + config.trend_slope_bars:
         return unknown
 
@@ -166,7 +173,8 @@ def classify_regime(
     # --- volatility ------------------------------------------------------------
     rolling_vol = returns.rolling(config.vol_window).std().dropna()
     current_vol = float(rolling_vol.iloc[-1])
-    annualized_pct = current_vol * _ANNUALIZATION * 100.0
+    periods = config.crypto_periods_per_year if "/" in symbol else config.equity_periods_per_year
+    annualized_pct = current_vol * math.sqrt(periods) * 100.0
     history = rolling_vol.tail(config.vol_percentile_window)
     percentile = float((history <= current_vol).mean() * 100.0)
     metrics["annualized_vol_pct"] = annualized_pct
@@ -268,6 +276,7 @@ def _load_assessment(
     symbol: str,
     price_loader: Optional[Callable] = None,
     config: Optional[RegimeConfig] = None,
+    as_of_date: Optional[str] = None,
 ) -> Optional[RegimeAssessment]:
     from datetime import date, timedelta
 
@@ -275,8 +284,21 @@ def _load_assessment(
     if not config.enabled:
         return None
     loader = price_loader or _default_price_loader()
-    start = (date.today() - timedelta(days=550)).isoformat()
-    prices = loader(symbol, start, None)
+    cutoff = date.fromisoformat(as_of_date) if as_of_date else date.today()
+    required_bars = max(
+        config.vol_window + config.vol_percentile_window,
+        config.trend_window + config.trend_slope_bars + 1,
+        config.liquidity_window + config.liquidity_baseline_window,
+    )
+    periods = config.crypto_periods_per_year if "/" in symbol else config.equity_periods_per_year
+    # Convert configured bar requirements to calendar days, including a buffer
+    # for holidays and missing bars instead of a fixed 550-day window.
+    days = math.ceil(required_bars * 365 / periods * 1.1)
+    start = (cutoff - timedelta(days=days)).isoformat()
+    prices = _normalize(loader(symbol, start, cutoff.isoformat()))
+    if not isinstance(prices.index, pd.DatetimeIndex):
+        raise ValueError("Regime history requires dated bars.")
+    prices = prices[[ts.date() <= cutoff for ts in prices.index]]
     return classify_regime(prices, config=config, symbol=symbol)
 
 
@@ -284,10 +306,11 @@ def regime_report_block(
     symbol: str,
     price_loader: Optional[Callable] = None,
     config: Optional[RegimeConfig] = None,
+    as_of_date: Optional[str] = None,
 ) -> str:
     """Markdown regime block for the market report; '' when unavailable."""
     try:
-        assessment = _load_assessment(symbol, price_loader, config)
+        assessment = _load_assessment(symbol, price_loader, config, as_of_date)
         if assessment is None or assessment.label == "unknown":
             return ""
         return assessment.to_markdown()

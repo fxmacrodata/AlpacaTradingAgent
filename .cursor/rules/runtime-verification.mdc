@@ -1,0 +1,10 @@
+---
+description: "Verify changes against the running application using any suitable available tools."
+alwaysApply: true
+---
+
+# Runtime verification
+
+Verify changes with observable runtime effects against the running application before finishing. Use any suitable available browser, HTTP, CLI, or debugging tools; no specific vendor or plugin is required.
+
+Implement first, then verify. If verification reveals a problem, fix it and verify again. Documentation-only changes do not require application runtime checks.

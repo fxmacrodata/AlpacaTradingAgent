@@ -213,7 +213,7 @@ class RobustnessTests(unittest.TestCase):
             gather_state=broken_gather,
             config=_config(),
         )
-        self.assertEqual(amount, 5_000.0)
+        self.assertEqual(amount, 0.0)
 
 
 class ConfigTests(unittest.TestCase):

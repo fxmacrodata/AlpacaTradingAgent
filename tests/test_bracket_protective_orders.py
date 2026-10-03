@@ -71,6 +71,7 @@ class TradeIntentNumericControlsTests(unittest.TestCase):
 class BracketExecutionTests(unittest.TestCase):
     def setUp(self):
         self.client = MagicMock()
+        self.client.get_orders.return_value = []
         order = MagicMock()
         order.id = "order-1"
         order.symbol = "AAPL"
@@ -144,13 +145,13 @@ class BracketExecutionTests(unittest.TestCase):
         self.assertIsNone(getattr(request, "stop_loss", None))
         self.assertTrue(any("crypto" in w.lower() for w in result["intent_warnings"]))
 
-    def test_inverted_long_prices_fall_back_to_advisory(self):
+    def test_inverted_long_prices_block_entry(self):
         # For a long entry the stop must sit below the target.
         result = self._execute(_intent(stop_loss="200", take_profit="180"))
 
-        self.assertEqual(result["protective_order_status"], "advisory_only")
-        request = self.client.submit_order.call_args[0][0]
-        self.assertIsNone(getattr(request, "stop_loss", None))
+        self.assertFalse(result["success"])
+        self.assertEqual(result["protective_order_status"], "invalid_controls")
+        self.client.submit_order.assert_not_called()
 
     def test_no_numeric_prices_stays_advisory(self):
         result = self._execute(_intent(stop_loss="below support"))
@@ -168,7 +169,7 @@ class BracketExecutionTests(unittest.TestCase):
         request = self.client.submit_order.call_args[0][0]
         self.assertIsNone(getattr(request, "stop_loss", None))
 
-    def test_bracket_rejection_falls_back_to_plain_market_order(self):
+    def test_bracket_failure_never_retries_as_unprotected_entry(self):
         plain_order = MagicMock()
         plain_order.id = "order-2"
         plain_order.symbol = "AAPL"
@@ -183,11 +184,9 @@ class BracketExecutionTests(unittest.TestCase):
 
         result = self._execute(_intent(stop_loss="182.50", take_profit="195"))
 
-        self.assertTrue(result["success"])
-        self.assertEqual(
-            result["protective_order_status"], "bracket_rejected_fallback_plain"
-        )
-        self.assertEqual(self.client.submit_order.call_count, 2)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["protective_order_status"], "submission_failed")
+        self.assertEqual(self.client.submit_order.call_count, 1)
 
     def test_short_entry_bracket_prices_validated_inverted(self):
         # For a short entry the target sits below the stop.
