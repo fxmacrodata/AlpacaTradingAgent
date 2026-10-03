@@ -21,18 +21,22 @@ class FakeResponse:
         return self._payload
 
 
-def _announcement_payload(rows, unit="%", name="Policy Rate"):
+def _announcement_payload(rows, unit="%", name="Policy Rate", as_of="2026-10-01T23:59:59Z"):
     return {
         "name": name,
         "value_metadata": {"source_unit": unit},
         "pagination": {"has_more": False},
-        "data": rows,
+        "replay": {"as_of": as_of},
+        "data": [{"publication_time_status": "confirmed", **row} for row in rows],
     }
 
 
 class FXMacroDataUtilsTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
+        historical = patch.object(fxmacrodata_utils, "_is_historical_date", return_value=True)
+        historical.start()
+        self.addCleanup(historical.stop)
 
     def _router(self, routes):
         def fake_get(url, params=None, headers=None, timeout=None):
@@ -82,6 +86,7 @@ class FXMacroDataUtilsTests(unittest.TestCase):
                     ],
                     unit="%YoY",
                     name="Inflation (HICP)",
+                    as_of="2026-08-20T23:59:59Z",
                 ),
             ),
         }

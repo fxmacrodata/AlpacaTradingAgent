@@ -1217,6 +1217,7 @@ class Toolkit:
         Retrieve the latest policy rate, inflation, core inflation, unemployment, GDP and
         2Y/10Y government bond yields for major economies (FXMacroData).
         Use this for non-US central bank and growth context alongside the FRED tools.
+        Historical dates require verified publication vintages; unverified values are omitted.
 
         Args:
             curr_date (str): Current date in yyyy-mm-dd format
@@ -1239,6 +1240,7 @@ class Toolkit:
         """
         Retrieve scheduled economic data releases (CPI, payrolls, GDP, central bank
         decisions, ...) with dates, times and importance for the swing window (FXMacroData).
+        This is the current schedule, not a historical schedule vintage for strict backtests.
 
         Args:
             curr_date (str): Current date in yyyy-mm-dd format
@@ -1262,6 +1264,7 @@ class Toolkit:
         """
         Retrieve FX reference rates for major currency pairs with change and range over
         the lookback window (FXMacroData).
+        Publication-time availability is not verified for strict backtests.
 
         Args:
             curr_date (str): Current date in yyyy-mm-dd format

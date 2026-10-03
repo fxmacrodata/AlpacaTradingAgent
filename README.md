@@ -164,7 +164,9 @@ Set `LLM_PROVIDER` in `.env`, the CLI, or the WebUI. Supported providers include
 
 - **FXMacroData API Key** (Optional, macro analyst):
   - Adds policy rates, inflation, unemployment, GDP and bond yields for non-US economies, the upcoming economic release calendar, and FX rates
-  - Set `FXMACRODATA_ENABLED=True` to use it without a key (USD only, recent 90 days); other currencies and FX rates need a key from [FXMacroData](https://fxmacrodata.com/?utm_source=github&utm_medium=referral&utm_campaign=AlpacaTradingAgent&utm_content=readme)
+  - Set `FXMACRODATA_ENABLED=True` to use it without a key (USD only, recent 90 days, 15-minute delay); other currencies and FX rates need a key from [FXMacroData](https://fxmacrodata.com/?utm_source=github&utm_medium=referral&utm_campaign=AlpacaTradingAgent&utm_content=readme)
+
+Historical macro reports use verified publication vintages available by the end of the requested date in UTC. Values are omitted when the provider cannot verify that history; today's reports use the latest stored values. Release calendars and FX reference-rate history do not establish what was available at a past decision time and should not be used as evidence in strict backtests.
 
 #### Crypto Data APIs
 - **CoinDesk/CryptoCompare API Key** (Required for crypto news):

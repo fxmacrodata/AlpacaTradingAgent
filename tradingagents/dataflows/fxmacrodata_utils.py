@@ -12,6 +12,7 @@ FXMACRODATA_API_KEY.
 """
 
 from datetime import datetime, timedelta, timezone
+import math
 from typing import Dict, List, Optional
 
 import requests
@@ -56,25 +57,75 @@ def _fxmacrodata_get(path: str, params: Optional[Dict] = None) -> Dict:
     except requests.exceptions.RequestException as e:
         return {"error": f"Failed to fetch FXMacroData {path}: {str(e)}"}
 
+    invalid_json = False
     try:
         body = response.json()
     except ValueError:
         body = {}
+        invalid_json = True
 
     if response.status_code in (401, 403):
         return {
             "error": f"FXMacroData {path} returned HTTP {response.status_code}: a valid "
             "FXMACRODATA_API_KEY is required (USD works without a key).",
             "key_required": True,
+            "status_code": response.status_code,
         }
     if response.status_code >= 400:
         detail = body.get("detail") if isinstance(body, dict) else None
-        return {"error": f"FXMacroData {path} returned HTTP {response.status_code}: {detail or response.reason}"}
+        return {
+            "error": f"FXMacroData {path} returned HTTP {response.status_code}: {detail or response.reason}",
+            "status_code": response.status_code,
+        }
+    if invalid_json or not _valid_payload(body, path):
+        return {"error": f"FXMacroData {path} returned an invalid JSON data response."}
     return body
 
 
+def _valid_payload(body, path: str) -> bool:
+    """Validate fields used by the reports before treating HTTP 200 as success."""
+    if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+        return False
+    for key in ("pagination", "value_metadata", "replay", "data_quality"):
+        if body.get(key) is not None and not isinstance(body[key], dict):
+            return False
+    unit = (body.get("value_metadata") or {}).get("source_unit")
+    if unit is not None and not isinstance(unit, str):
+        return False
+    pagination = body.get("pagination") or {}
+    if "has_more" in pagination and not isinstance(pagination["has_more"], bool):
+        return False
+    next_offset = pagination.get("next_offset")
+    if next_offset is not None and (type(next_offset) is not int or next_offset < 0):
+        return False
+    for row in body["data"]:
+        if not isinstance(row, dict):
+            return False
+        value = row.get("val")
+        if value is not None:
+            try:
+                if isinstance(value, bool) or not math.isfinite(float(value)):
+                    return False
+            except (ValueError, TypeError, OverflowError):
+                return False
+            if path.startswith(("/announcements/", "/forex/")):
+                try:
+                    datetime.strptime(row["date"], "%Y-%m-%d")
+                except (KeyError, ValueError, TypeError):
+                    return False
+        announced = row.get("announcement_datetime")
+        if announced is not None and (
+            type(announced) not in (int, float) or not 0 <= announced < 253402300800
+        ):
+            return False
+        when = row.get("announcement_datetime_utc")
+        if when is not None and not isinstance(when, str):
+            return False
+    return True
+
+
 def _fetch_rows(path: str, params: Dict) -> Dict:
-    """Fetch every row of a paginated list endpoint (offset + pagination.has_more)."""
+    """Fetch a complete window within the request budget, or return an error."""
     rows: List[Dict] = []
     params = dict(params)
     params.setdefault("limit", PAGE_LIMIT)
@@ -89,9 +140,19 @@ def _fetch_rows(path: str, params: Dict) -> Dict:
         page = body.get("data") or []
         rows.extend(page)
         pagination = body.get("pagination") or {}
-        if not pagination.get("has_more") or not page:
+        if not pagination.get("has_more"):
             break
-        offset = pagination.get("next_offset") or offset + len(page)
+        next_offset = pagination.get("next_offset", offset + len(page))
+        if not page or next_offset is None or next_offset <= offset:
+            return {"error": f"FXMacroData {path} returned incomplete or stalled pagination."}
+        offset = next_offset
+        if body.get("dataset_version"):
+            params.setdefault("dataset_version", body["dataset_version"])
+    else:
+        return {
+            "error": f"FXMacroData {path} window is incomplete after {MAX_PAGES} pages; "
+            "use a shorter lookback. No full-window statistics were calculated."
+        }
 
     body = dict(body)
     body["data"] = rows
@@ -118,12 +179,17 @@ def _end_of_day_epoch(curr_date: str) -> int:
     return int((day + timedelta(days=1)).timestamp())
 
 
-def _released_rows(rows: List[Dict], curr_date: str) -> List[Dict]:
+def _is_historical_date(curr_date: str) -> bool:
+    return datetime.strptime(curr_date, "%Y-%m-%d").date() < datetime.now(timezone.utc).date()
+
+
+def _released_rows(rows: List[Dict], curr_date: str, *, historical: bool = False) -> List[Dict]:
     """Keep rows that have a value and were public by the end of curr_date.
 
     `val` can be null for a scheduled-but-unpublished period; those rows are
-    dropped rather than read as zero. The announcement time check keeps
-    backtests from seeing a print before it was released.
+    dropped rather than read as zero. Historical callers also require a
+    provider replay pinned to the cutoff and confirmed publication times;
+    an old period or an assumed timestamp is not proof of availability.
     """
     cutoff = _end_of_day_epoch(curr_date)
     released = []
@@ -131,6 +197,12 @@ def _released_rows(rows: List[Dict], curr_date: str) -> List[Dict]:
         if row.get("val") is None:
             continue
         announced = row.get("announcement_datetime")
+        if historical and (
+            row.get("publication_time_status") != "confirmed"
+            or row.get("release_time_assumed")
+            or announced is None
+        ):
+            continue
         if announced is not None and announced >= cutoff:
             continue
         released.append(row)
@@ -158,24 +230,50 @@ def get_global_macro_indicators(curr_date: str, currencies=None) -> str:
         Markdown report with one table per currency
     """
     currency_list, skipped_for_key = _split_by_access(_parse_currencies(currencies))
+    try:
+        historical = _is_historical_date(curr_date)
+        as_of = datetime.fromtimestamp(
+            _end_of_day_epoch(curr_date) - 1, timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return "Error: curr_date must be a valid YYYY-MM-DD date."
     result = f"## Global Macro Indicators as of {curr_date} (FXMacroData)\n\n"
+    if historical:
+        result += f"Only verified publication vintages known by {as_of} are included.\n\n"
+    else:
+        result += "Latest stored values; these are not a verified historical replay.\n\n"
+    errors = []
+    fetched_any = False
 
     for currency in currency_list:
         table_rows = []
         key_required = False
 
         for slug, label in HEADLINE_INDICATORS.items():
+            params = {"end_date": curr_date, "limit": 6}
+            if historical:
+                params["as_of"] = as_of
             data = _fxmacrodata_get(
                 f"/announcements/{currency.lower()}/{slug}",
-                {"end_date": curr_date, "limit": 6},
+                params,
             )
             if "error" in data:
+                # A currency may not publish every headline series.
+                if data.get("status_code") == 404:
+                    continue
+                errors.append(f"{currency}/{slug}: {data['error']}")
                 if data.get("key_required"):
                     key_required = True
                     break
                 continue
 
-            rows = _released_rows(data.get("data") or [], curr_date)
+            if historical and (data.get("replay") or {}).get("as_of") != as_of:
+                errors.append(
+                    f"{currency}/{slug}: provider did not verify the requested historical cutoff; values omitted."
+                )
+                continue
+            fetched_any = True
+            rows = _released_rows(data.get("data") or [], curr_date, historical=historical)
             if not rows:
                 continue
 
@@ -200,7 +298,10 @@ def get_global_macro_indicators(curr_date: str, currencies=None) -> str:
 
         result += f"### {currency}\n"
         if not table_rows:
-            result += "No recent releases available.\n\n"
+            result += (
+                "No verified point-in-time releases available for this date.\n\n"
+                if historical else "No recent releases available.\n\n"
+            )
             continue
         result += "| Indicator | Latest | Period | Previous | Change |\n"
         result += "|-----------|--------|--------|----------|--------|\n"
@@ -212,6 +313,10 @@ def get_global_macro_indicators(curr_date: str, currencies=None) -> str:
             "(only USD is available without a key).\n"
         )
 
+    for error in errors:
+        result += f"\n**Error**: {error}\n"
+    if errors and not fetched_any:
+        result = "Error: FXMacroData macro indicators could not be loaded.\n\n" + result
     return result
 
 
@@ -230,6 +335,7 @@ def get_economic_release_calendar(curr_date: str, currencies=None, days_ahead: i
     currency_list, skipped_for_key = _split_by_access(_parse_currencies(currencies))
     end_date = (datetime.strptime(curr_date, "%Y-%m-%d") + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
     result = f"## Economic Release Calendar ({curr_date} to {end_date}, FXMacroData)\n\n"
+    result += "Current release schedule; historical schedule vintages are not available for strict backtests.\n\n"
 
     events = []
     errors = []
@@ -301,6 +407,7 @@ def get_fx_rates_report(curr_date: str, pairs=None, lookback_days: int = 30) -> 
 
     start_date = (datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     result = f"## FX Rates ({start_date} to {curr_date}, FXMacroData)\n\n"
+    result += "Reference-rate history; publication-time availability is not verified for strict backtests.\n\n"
     result += "| Pair | Latest | Date | Change | Range (Low - High) |\n"
     result += "|------|--------|------|--------|--------------------|\n"
 
