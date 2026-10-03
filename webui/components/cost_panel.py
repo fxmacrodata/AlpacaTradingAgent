@@ -2,7 +2,7 @@
 webui/components/cost_panel.py - LLM cost monitoring panel
 
 Attributes LLM spend from the persisted run logs to analyses, days,
-symbols, and models, next to each symbol's realized returns — so cost
+symbols, and models, next to each symbol's recorded outcome returns — so cost
 without benefit is visible at a glance. Estimates are an upper bound
 (cache-read discounts are not recorded) and unknown models are surfaced
 as unpriced tokens rather than guessed.
@@ -20,7 +20,8 @@ def create_cost_panel():
                 html.H4("LLM Cost Monitor", className="mb-1"),
                 html.Div(
                     "Estimated spend from recorded token usage — attributed per "
-                    "day, symbol, and model, against realized returns. Prices are "
+                    "day, symbol, and model, alongside hypothetical outcome returns, "
+                    "which are not realized account profits. Prices are "
                     "estimates (override via llm_pricing_per_million); cache "
                     "discounts are not tracked, so this is an upper bound.",
                     className="text-muted small mb-3",

@@ -119,12 +119,13 @@ def get_treasury_yield_curve(curr_date: str) -> str:
         ten_year = next((item for item in yield_data if item["maturity"] == "10 Year"), None)
         
         if two_year and ten_year:
-            spread = ten_year["yield"] - two_year["yield"]
+            # FRED yields are percentages; one percentage point is 100 bps.
+            spread = (ten_year["yield"] - two_year["yield"]) * 100
             result += f"- **2Y-10Y Spread**: {spread:.2f} basis points\n"
             
             if spread < 0:
                 result += "- **⚠️ INVERTED YIELD CURVE**: Potential recession signal\n"
-            elif spread < 50:
+            elif spread < get_config().get("macro_flat_curve_threshold_bps", 50):
                 result += "- **📊 FLAT YIELD CURVE**: Economic uncertainty\n"
             else:
                 result += "- **📈 NORMAL YIELD CURVE**: Healthy economic expectations\n"
@@ -151,7 +152,7 @@ def get_economic_indicators_report(curr_date: str, lookback_days: int = 90) -> s
     indicators = {
         "Federal Funds Rate": {
             "series": "FEDFUNDS",
-            "description": "Federal Reserve's target interest rate",
+            "description": "Monthly average effective federal funds rate",
             "unit": "%"
         },
         "Consumer Price Index (CPI)": {
@@ -173,13 +174,13 @@ def get_economic_indicators_report(curr_date: str, lookback_days: int = 90) -> s
         },
         "Nonfarm Payrolls": {
             "series": "PAYEMS",
-            "description": "Monthly change in employment",
+            "description": "Total nonfarm payroll employment",
             "unit": "Thousands",
             "mom": True
         },
-        "GDP Growth Rate": {
+        "Gross Domestic Product": {
             "series": "GDP",
-            "description": "Gross Domestic Product growth",
+            "description": "Nominal GDP level at a seasonally adjusted annual rate",
             "unit": "Billions",
             "qoq": True
         },

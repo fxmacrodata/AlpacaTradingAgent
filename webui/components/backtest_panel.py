@@ -110,9 +110,9 @@ def create_backtest_panel():
             ),
             dbc.Col(
                 html.Div(
-                    "Injects one dated lesson per recorded decision (with its "
-                    "realized next-open return) into the persistent agent "
-                    "memories — idempotent, zero LLM cost.",
+                    "Adds dated lessons to agent memory. BUY and SHORT lessons "
+                    "use hypothetical fixed-horizon returns, not realized account "
+                    "profits. Duplicate lessons are skipped; embedding API costs may apply.",
                     className="text-muted small",
                 ),
             ),

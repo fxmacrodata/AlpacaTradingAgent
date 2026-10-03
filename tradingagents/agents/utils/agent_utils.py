@@ -788,7 +788,7 @@ class Toolkit:
     def get_stockstats_indicators_report_online(
         symbol: Annotated[str, "ticker symbol (stocks: AAPL, TSM; crypto: ETH/USD, BTC/USD)"],
         indicator: Annotated[
-            str, "technical indicator to get the analysis and report of"
+            str, "Indicator name, comma-separated names, or all (e.g. rsi_14,macd)"
         ],
         curr_date: Annotated[
             str, "The current trading date you are trading on, YYYY-mm-dd"
@@ -804,7 +804,8 @@ class Toolkit:
 
         Args:
             symbol (str): Ticker symbol - stocks: AAPL, TSM; crypto: ETH/USD, BTC/USD
-            indicator (str): Indicator name (e.g. rsi_14, macd, close_8_ema, atr_14, all)
+            indicator (str): One or comma-separated names (rsi_14, macd, close_8_ema,
+                close_200_sma, atr_14, stochrsi_14, bbands), or all.
             curr_date (str): The current trading date you are trading on, YYYY-mm-dd
             look_back_days (int): Calendar days to include in history
             timeframe (str): 1Hour, 4Hour, or 1Day

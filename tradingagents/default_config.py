@@ -149,6 +149,8 @@ DEFAULT_CONFIG = {
     "max_same_tool_call_repeats": 1,  # Max repeats for the same tool+args signature in a single analyst node
     # Tool settings
     "macro_request_timeout_seconds": 20,
+    "macro_flat_curve_threshold_bps": 50.0,
+    "technical_lookback_days": {"1h": 60, "4h": 180, "1d": 400},
     "news_request_timeout_seconds": 20,
     "online_tools": True,
     "tool_semantic_retry_enabled": True,  # Retry web-search tool calls once on low-quality interactive/undersized output

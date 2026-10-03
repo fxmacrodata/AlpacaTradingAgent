@@ -11,7 +11,7 @@ import pytest
 from tradingagents.backtest.engine import normalize_price_frame, run_backtest, run_walk_forward
 from tradingagents.backtest.signals import load_recorded_signals
 from tradingagents.dataflows.alpaca_utils import AlpacaUtils
-from tradingagents.dataflows.macro_utils import get_fred_data, get_fed_calendar_and_minutes
+from tradingagents.dataflows.macro_utils import get_fred_data, get_fed_calendar_and_minutes, get_treasury_yield_curve
 from tradingagents.regime import regime_report_block
 
 
@@ -21,6 +21,25 @@ def bars(days=100):
         "low": [98.0] * days, "close": [101.0] * days,
         "volume": [1000.0] * days,
     }, index=pd.bdate_range("2025-01-01", periods=days))
+
+
+@pytest.mark.parametrize("symbol,client_name,method", [
+    ("BTC/USD", "get_alpaca_crypto_client", "get_crypto_bars"),
+    ("AAPL", "get_alpaca_stock_client", "get_stock_bars"),
+])
+def test_price_data_excludes_next_day_inclusive_broker_boundary(symbol, client_name, method):
+    frame = pd.DataFrame({
+        "symbol": [symbol] * 3,
+        "timestamp": pd.to_datetime(["2026-10-01", "2026-10-02", "2026-10-03"], utc=True),
+        "open": [100.0] * 3, "close": [101.0] * 3,
+        "high": [102.0] * 3, "low": [99.0] * 3, "volume": [1000] * 3,
+    }).set_index(["symbol", "timestamp"])
+    client = MagicMock()
+    getattr(client, method).return_value = SimpleNamespace(df=frame)
+    with patch(f"tradingagents.dataflows.alpaca_utils.{client_name}", return_value=client):
+        result = AlpacaUtils.get_stock_data(symbol, "2026-10-01", "2026-10-02")
+    assert len(result) == 2
+    assert result["timestamp"].max() == pd.Timestamp("2026-10-02", tz="UTC")
 
 
 def test_partial_close_uses_broker_percentage_units():
@@ -88,6 +107,19 @@ def test_macro_report_does_not_invent_an_outdated_meeting_schedule():
         report = get_fed_calendar_and_minutes("2026-10-03")
     assert "2024 FOMC" not in report
     assert "Quantitative tightening operations" not in report
+
+
+@pytest.mark.parametrize("ten_year,spread,classification", [
+    (5.0, "100.00", "NORMAL"), (4.25, "25.00", "FLAT"), (3.5, "-50.00", "INVERTED"),
+])
+def test_yield_curve_converts_percent_to_basis_points_before_classifying(ten_year, spread, classification):
+    def data(series, *_):
+        value = ten_year if series == "DGS10" else 4.0
+        return {"observations": [{"value": str(value), "date": "2026-10-01"}]}
+    with patch("tradingagents.dataflows.macro_utils.get_fred_data", side_effect=data):
+        report = get_treasury_yield_curve("2026-10-02")
+    assert f"{spread} basis points" in report
+    assert f"{classification} YIELD CURVE" in report
 
 
 def test_historical_rerun_cannot_overwrite_a_contemporaneous_decision(tmp_path):

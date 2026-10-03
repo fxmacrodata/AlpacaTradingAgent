@@ -471,6 +471,14 @@ class AlpacaUtils:
             else:
                 # If no symbol column, assume all data is for the requested symbol
                 pass
+
+            # Alpaca can include a bar at the exact end boundary. The public
+            # date range includes end_date, but must exclude the next day's
+            # midnight bar (especially for daily crypto data).
+            if end is not None and "timestamp" in df.columns:
+                cutoff = pd.Timestamp(end)
+                cutoff = cutoff.tz_localize("UTC") if cutoff.tzinfo is None else cutoff.tz_convert("UTC")
+                df = df.loc[pd.to_datetime(df["timestamp"], utc=True) < cutoff].reset_index(drop=True)
                 
             if df.empty:
                 raise ValueError("empty Alpaca bar response")

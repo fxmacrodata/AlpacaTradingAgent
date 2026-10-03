@@ -66,15 +66,16 @@ advisory.
    action. If auto-trading is on, the WebUI executes it via
    `AlpacaUtils.execute_trade_intent` / `execute_trading_action`.
 6. **Decision log** — the completed decision is appended to a markdown
-   memory log as `pending`, and resolved later with realized returns and a
-   reflection once the outcome is known.
+   memory log as `pending`, and resolved later with hypothetical fixed-horizon
+   asset returns and a reflection once enough bars are available. These
+   outcomes are not broker fill-based account profits.
 
 ## Memory and learning
 
 Two complementary memories:
 
 - **Decision log** (`TradingMemoryLog`): append-only markdown of every
-  final decision, later updated with realized return / alpha / holding
+  final decision, later updated with hypothetical return / alpha / holding
   days and a reflection. Recent same-ticker and cross-ticker entries are
   injected into future prompts as past context.
 - **Per-agent situation memories** (`FinancialSituationMemory`): five

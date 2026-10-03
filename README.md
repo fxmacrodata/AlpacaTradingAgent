@@ -50,7 +50,7 @@ AlpacaTradingAgent introduces powerful new capabilities specifically designed fo
 - **Executable Final Action**: Final decisions preserve `BUY/HOLD/SELL` or `LONG/NEUTRAL/SHORT` for Alpaca execution
 - **Advisory Ratings**: Upstream-style ratings are treated as metadata only and never directly trigger Alpaca orders
 - **Structured Output Fallback**: Research Manager, Trader, and Risk Manager use structured schemas where supported and gracefully retry as free text otherwise
-- **Persistent Decision Log**: Completed decisions are written to a markdown memory log and later resolved with realized returns and reflections
+- **Persistent Decision Log**: Completed decisions are written to a markdown memory log and later evaluated with hypothetical fixed-horizon asset returns and reflections; these are not realized account profits
 - **Checkpoint Resume**: Optional per-symbol SQLite checkpoints allow failed LangGraph runs to resume while successful runs clean up automatically
 - **Safe Paths**: Report, cache, checkpoint, and log paths use safe ticker components, including crypto symbols like `BTC/USD -> BTC_USD`
 

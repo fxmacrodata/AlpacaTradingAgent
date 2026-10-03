@@ -94,7 +94,7 @@ def _build_symbol_table(per_symbol, returns_by_symbol):
                 html.Th("Tokens"),
                 html.Th("Est. cost"),
                 html.Th("Resolved decisions"),
-                html.Th("Avg realized return"),
+                html.Th("Avg hypothetical return"),
             ]
         )
     )
@@ -123,7 +123,7 @@ def _build_symbol_table(per_symbol, returns_by_symbol):
         )
     return html.Div(
         [
-            html.H6("Per symbol — cost vs realized outcome", className="mt-2"),
+            html.H6("Per symbol — cost and hypothetical outcome", className="mt-2"),
             dbc.Table([header, html.Tbody(rows)], bordered=False, hover=True, size="sm", striped=True),
         ]
     )
