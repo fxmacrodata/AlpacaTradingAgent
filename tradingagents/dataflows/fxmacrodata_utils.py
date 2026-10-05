@@ -43,19 +43,35 @@ DEFAULT_FX_PAIRS = ["EUR/USD", "USD/JPY", "GBP/USD"]
 def _fxmacrodata_get(path: str, params: Optional[Dict] = None) -> Dict:
     """GET an FXMacroData endpoint. Returns the JSON body or {"error": ...}."""
     headers = {"Accept": "application/json"}
-    api_key = get_fxmacrodata_api_key()
+    api_key = (get_fxmacrodata_api_key() or "").strip()
     if api_key:
+        # requests echoes an invalid header value in its exception message, and
+        # that message is returned to the model, so never let the key reach it.
+        if any(char.isspace() or not char.isprintable() for char in api_key):
+            return {
+                "error": "FXMACRODATA_API_KEY contains whitespace or control characters.",
+                "key_required": True,
+            }
         headers["X-API-Key"] = api_key
 
     try:
+        # requests only strips Authorization on a cross-host redirect, so a
+        # followed redirect would forward X-API-Key to the new host.
         response = requests.get(
             f"{BASE_URL}{path}",
             params=params or {},
             headers=headers,
             timeout=REQUEST_TIMEOUT,
+            allow_redirects=False,
         )
     except requests.exceptions.RequestException as e:
         return {"error": f"Failed to fetch FXMacroData {path}: {str(e)}"}
+
+    if 300 <= response.status_code < 400:
+        return {
+            "error": f"FXMacroData {path} returned a redirect (HTTP {response.status_code}), which is not followed.",
+            "status_code": response.status_code,
+        }
 
     invalid_json = False
     try:
@@ -78,7 +94,9 @@ def _fxmacrodata_get(path: str, params: Optional[Dict] = None) -> Dict:
             "status_code": response.status_code,
         }
     if invalid_json or not _valid_payload(body, path):
-        return {"error": f"FXMacroData {path} returned an invalid JSON data response."}
+        detail = body.get("detail") if isinstance(body, dict) else None
+        suffix = f": {detail}" if isinstance(detail, str) else "."
+        return {"error": f"FXMacroData {path} returned an invalid JSON data response{suffix}"}
     return body
 
 
